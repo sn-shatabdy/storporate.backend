@@ -2,6 +2,7 @@ using FluentValidation;
 using Microsoft.AspNetCore.Diagnostics;
 using Storporate.Infrastructure.Llm;
 using Storporate.Infrastructure.Storage;
+using Storporate.Modules.Identity.Exceptions;
 
 namespace Storporate.Api.Errors;
 
@@ -27,6 +28,16 @@ public sealed class GlobalExceptionHandler(
                 (StatusCodes.Status502BadGateway, MapLlmProviderError(llmProviderException)),
             ArtifactStorageException artifactStorageException =>
                 (StatusCodes.Status502BadGateway, MapArtifactStorageError(artifactStorageException)),
+            OtpInvalidException otpInvalidException =>
+                (StatusCodes.Status400BadRequest, new ErrorResponse("otp_invalid", otpInvalidException.Message)),
+            OtpLockedException otpLockedException =>
+                (StatusCodes.Status401Unauthorized, new ErrorResponse("otp_locked", otpLockedException.Message)),
+            OtpRateLimitExceededException otpRateLimitExceededException =>
+                (StatusCodes.Status429TooManyRequests, new ErrorResponse("otp_rate_limit_exceeded", otpRateLimitExceededException.Message)),
+            EmailAlreadyRegisteredException emailAlreadyRegisteredException =>
+                (StatusCodes.Status409Conflict, new ErrorResponse("email_already_registered", emailAlreadyRegisteredException.Message)),
+            RefreshTokenReusedException refreshTokenReusedException =>
+                (StatusCodes.Status401Unauthorized, new ErrorResponse("refresh_token_reused", refreshTokenReusedException.Message)),
             _ => (StatusCodes.Status500InternalServerError, MapUnhandledError(exception)),
         };
 

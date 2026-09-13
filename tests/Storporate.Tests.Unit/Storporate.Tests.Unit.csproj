@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Storporate.SharedKernel\Storporate.SharedKernel.csproj" />
+    <ProjectReference Include="..\..\src\Storporate.Api\Storporate.Api.csproj" />
   </ItemGroup>
 
 </Project>

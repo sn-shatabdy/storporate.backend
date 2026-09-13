@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Storporate.Infrastructure.Persistence.Configurations;
 using Storporate.SharedKernel.Entities;
 
 namespace Storporate.Infrastructure.Persistence;
@@ -11,9 +12,21 @@ public sealed class WriteDbContext(DbContextOptions<WriteDbContext> options) : D
 {
     public DbSet<Job> Jobs => Set<Job>();
 
+    public DbSet<User> Users => Set<User>();
+
+    public DbSet<OtpCode> OtpCodes => Set<OtpCode>();
+
+    public DbSet<Session> Sessions => Set<Session>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        // STOR-61's new entities use standalone IEntityTypeConfiguration classes (see
+        // Persistence/Configurations/) rather than the inline style below, which predates them.
+        modelBuilder.ApplyConfiguration(new UserConfiguration());
+        modelBuilder.ApplyConfiguration(new OtpCodeConfiguration());
+        modelBuilder.ApplyConfiguration(new SessionConfiguration());
 
         modelBuilder.Entity<Job>(entity =>
         {
