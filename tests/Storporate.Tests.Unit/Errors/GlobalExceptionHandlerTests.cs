@@ -65,6 +65,10 @@ public class GlobalExceptionHandlerTests
         [
             new RefreshTokenReusedException(), StatusCodes.Status401Unauthorized, "refresh_token_reused",
         ];
+        yield return
+        [
+            new ActorTypeRequiredException(), StatusCodes.Status400BadRequest, "actor_type_required",
+        ];
     }
 
     private sealed class FakeHostEnvironment : IHostEnvironment

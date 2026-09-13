@@ -38,6 +38,8 @@ public sealed class GlobalExceptionHandler(
                 (StatusCodes.Status409Conflict, new ErrorResponse("email_already_registered", emailAlreadyRegisteredException.Message)),
             RefreshTokenReusedException refreshTokenReusedException =>
                 (StatusCodes.Status401Unauthorized, new ErrorResponse("refresh_token_reused", refreshTokenReusedException.Message)),
+            ActorTypeRequiredException actorTypeRequiredException =>
+                (StatusCodes.Status400BadRequest, new ErrorResponse("actor_type_required", actorTypeRequiredException.Message)),
             _ => (StatusCodes.Status500InternalServerError, MapUnhandledError(exception)),
         };
 

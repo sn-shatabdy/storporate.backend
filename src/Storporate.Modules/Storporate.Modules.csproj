@@ -2,11 +2,17 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Storporate.SharedKernel\Storporate.SharedKernel.csproj" />
+    <!-- STOR-61 Phase 2: the Identity module's OTP/session handlers need direct EF Core access
+         (WriteDbContext) and the Options types bound in Storporate.Infrastructure
+         (OtpOptions/JwtOptions/OtpRateLimitOptions) — the first Modules code to need either.
+         Infrastructure has no reference back to Modules, so this isn't circular. -->
+    <ProjectReference Include="..\Storporate.Infrastructure\Storporate.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="FluentValidation" Version="12.1.1" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.10" />
   </ItemGroup>
 
 </Project>

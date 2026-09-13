@@ -1,16 +1,19 @@
 using Microsoft.Extensions.DependencyInjection;
+using Storporate.Infrastructure.Email;
 
 namespace Storporate.Modules.Identity;
 
 /// <summary>
-/// DI entry point for the Identity module. Empty-bodied for STOR-61 Phase 1 — no handlers exist
-/// yet — but wired up now so later phases (OTP request/verify, Google login, session management)
-/// add registrations here instead of inventing a new module wiring pattern.
+/// DI entry point for the Identity module. STOR-61 Phase 2 wires up email + rate-limited OTP
+/// login here; Phase 3 adds Google login and session management (refresh/logout/me/sessions)
+/// alongside it.
 /// </summary>
 public static class DependencyInjection
 {
     public static IServiceCollection AddIdentityHandlers(this IServiceCollection services)
     {
+        services.AddResendEmailSender();
+
         return services;
     }
 }

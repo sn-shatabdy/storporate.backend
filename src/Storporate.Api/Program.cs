@@ -1,13 +1,18 @@
+using System.Threading.RateLimiting;
 using FluentValidation;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Storporate.Api.Configuration;
 using Storporate.Api.Errors;
+using Storporate.Infrastructure.Email;
 using Storporate.Infrastructure.Llm;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Infrastructure.Security;
+using Storporate.Infrastructure.Security.RateLimiting;
 using Storporate.Infrastructure.Storage;
+using Storporate.Modules.Identity;
 using Storporate.Modules.PlatformFoundations;
 using Storporate.Modules.PlatformFoundations.Diagnostics;
 using Storporate.SharedKernel.Abstractions;
@@ -57,6 +62,33 @@ builder.Services
         $"{FieldEncryptionOptions.SectionName}:{nameof(FieldEncryptionOptions.FieldEncryptionKey)} must be a base64-encoded 32-byte (AES-256) key.")
     .ValidateOnStart();
 
+builder.Services
+    .AddOptions<ResendOptions>()
+    .Bind(builder.Configuration.GetSection(ResendOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services
+    .AddOptions<JwtOptions>()
+    .Bind(builder.Configuration.GetSection(JwtOptions.SectionName))
+    .ValidateDataAnnotations()
+    .Validate(
+        options => JwtOptions.IsValidSigningKey(options.SigningKey),
+        $"{JwtOptions.SectionName}:{nameof(JwtOptions.SigningKey)} must be at least {JwtOptions.MinimumSigningKeyLengthBytes} bytes (UTF-8) for HMAC-SHA256 signing.")
+    .ValidateOnStart();
+
+builder.Services
+    .AddOptions<OtpOptions>()
+    .Bind(builder.Configuration.GetSection(OtpOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services
+    .AddOptions<OtpRateLimitOptions>()
+    .Bind(builder.Configuration.GetSection(OtpRateLimitOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
 // --- Persistence ---
 builder.Services.AddDbContext<WriteDbContext>((serviceProvider, options) =>
 {
@@ -74,6 +106,7 @@ builder.Services.AddDbContext<WriteDbContext>((serviceProvider, options) =>
 
 // --- Modules ---
 builder.Services.AddPlatformFoundationsHandlers();
+builder.Services.AddIdentityHandlers();
 
 // --- AI provider (Bionic-hosted local LLM, OpenAI-compatible) ---
 builder.Services.AddBionicLlmProvider();
@@ -81,8 +114,42 @@ builder.Services.AddBionicLlmProvider();
 // --- Artifact storage (S3-compatible; local MinIO now, real Cloudflare R2 later) ---
 builder.Services.AddArtifactStorage();
 
+// --- JWT access/refresh token issuance (STOR-61 Phase 2) ---
+builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
+
+// --- OTP rate limiting: chained per-email fixed-window + per-IP token-bucket (STOR-61 Phase 2).
+// Read directly off configuration (rather than via the DI-resolved, validated IOptions<T>) purely
+// because RateLimiterOptions' own configure delegate has no service-provider-aware overload to
+// bind from; OtpRateLimitOptions is still separately registered above through the standard
+// Options pattern so ValidateOnStart's fail-fast behavior is exercised regardless. ---
+var otpRateLimitOptions = builder.Configuration.GetSection(OtpRateLimitOptions.SectionName).Get<OtpRateLimitOptions>()
+    ?? new OtpRateLimitOptions();
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddOtpCombinedPolicy(otpRateLimitOptions);
+
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+        {
+            context.HttpContext.Response.Headers.RetryAfter =
+                Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)).ToString();
+        }
+
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new ErrorResponse("otp_rate_limit_exceeded", "Too many requests. Please try again later."),
+            cancellationToken);
+    };
+});
+
 // --- FluentValidation: one validator per use case, discovered by scanning the Modules assembly ---
-builder.Services.AddValidatorsFromAssembly(typeof(DependencyInjection).Assembly);
+// (fully qualified: both Storporate.Modules.PlatformFoundations and Storporate.Modules.Identity
+// declare a "DependencyInjection" type, so an unqualified reference would be ambiguous now that
+// both namespaces are imported above — either type's assembly is the same Modules assembly.)
+builder.Services.AddValidatorsFromAssembly(typeof(Storporate.Modules.PlatformFoundations.DependencyInjection).Assembly);
 
 // --- Global error handling ---
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
@@ -109,6 +176,13 @@ if (!app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 
 app.UseCors(FrontendDevCorsPolicy);
+
+// --- OTP rate limiting: the email-capture middleware must run before UseRateLimiter() so the
+// per-email partition-key function (which runs inside UseRateLimiter) can see the parsed body. ---
+app.UseOtpRateLimitEmailCapture();
+app.UseRateLimiter();
+
+app.MapIdentityEndpoints();
 
 // --- Temporary diagnostics endpoints (Phase 2: validation/exception-handler proof; Phase 3/4
 // add llm-ping/storage-ping alongside these) ---
