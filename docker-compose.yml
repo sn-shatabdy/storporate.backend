@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: storporate-postgres
+    environment:
+      POSTGRES_USER: storporate
+      POSTGRES_PASSWORD: storporate
+      POSTGRES_DB: storporate-dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - storporate-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U storporate -d storporate-dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio
+    container_name: storporate-minio
+    environment:
+      MINIO_ROOT_USER: storporate-minio
+      MINIO_ROOT_PASSWORD: storporate-minio-secret
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - storporate-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  storporate-postgres-data:
+  storporate-minio-data:
