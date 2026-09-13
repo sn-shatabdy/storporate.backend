@@ -148,6 +148,16 @@ builder.Services
                 $"{JwtOptions.SectionName}:{nameof(JwtOptions.SigningKey)} must be at least {JwtOptions.MinimumSigningKeyLengthBytes} bytes for HMAC-SHA256 signing.");
         }
 
+        // Without this, ASP.NET Core's JwtSecurityTokenHandler applies its legacy
+        // DefaultInboundClaimTypeMap when validating an incoming token, silently renaming
+        // standard claims on the ClaimsPrincipal it builds (e.g. "sub" -> ClaimTypes.NameIdentifier,
+        // "email" -> ClaimTypes.Email). JwtTokenService issues tokens using the raw
+        // JwtRegisteredClaimNames values, and every [Authorize]-gated handler (GetCurrentUserHandler,
+        // LogoutHandler, LogoutAllHandler, ListSessionsHandler) reads claims back via those same raw
+        // JwtRegisteredClaimNames constants, so the remapped types would never be found. Disabling
+        // the remap keeps the claim types issued == the claim types read.
+        options.MapInboundClaims = false;
+
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
