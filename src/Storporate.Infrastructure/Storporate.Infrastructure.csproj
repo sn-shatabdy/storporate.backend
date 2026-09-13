@@ -23,6 +23,7 @@
     <!-- Microsoft.Extensions.Http is now supplied by the Microsoft.AspNetCore.App
          FrameworkReference above (added for RateLimiting/HttpContext/IHostEnvironment); an
          explicit PackageReference to it is redundant and blocked by NuGet's package-pruning. -->
+    <PackageReference Include="Google.Apis.Auth" Version="1.71.0" />
     <PackageReference Include="Resend" Version="0.17.0" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.22.0" />
   </ItemGroup>

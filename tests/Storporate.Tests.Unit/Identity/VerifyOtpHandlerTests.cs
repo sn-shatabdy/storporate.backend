@@ -203,5 +203,14 @@ public class VerifyOtpHandlerTests
         public Task<AuthTokenResult> IssueTokensAsync(User user, string? userAgent, CancellationToken cancellationToken = default) =>
             Task.FromResult(new AuthTokenResult(
                 "fake-access-token", DateTime.UtcNow.AddMinutes(15), "fake-refresh-token", DateTime.UtcNow.AddDays(7)));
+
+        public Task<AuthTokenResult> IssueRotatedTokensAsync(
+            User user,
+            string? userAgent,
+            Guid familyId,
+            Guid replacedSessionId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new AuthTokenResult(
+                "fake-access-token-rotated", DateTime.UtcNow.AddMinutes(15), "fake-refresh-token-rotated", DateTime.UtcNow.AddDays(7)));
     }
 }

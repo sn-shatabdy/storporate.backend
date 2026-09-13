@@ -1,8 +1,11 @@
+using System.Text;
 using System.Threading.RateLimiting;
 using FluentValidation;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 using Storporate.Api.Configuration;
 using Storporate.Api.Errors;
@@ -89,6 +92,12 @@ builder.Services
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
+builder.Services
+    .AddOptions<GoogleAuthOptions>()
+    .Bind(builder.Configuration.GetSection(GoogleAuthOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
 // --- Persistence ---
 builder.Services.AddDbContext<WriteDbContext>((serviceProvider, options) =>
 {
@@ -116,6 +125,43 @@ builder.Services.AddArtifactStorage();
 
 // --- JWT access/refresh token issuance (STOR-61 Phase 2) ---
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
+
+// --- Google ID token validation (STOR-61 Phase 3) ---
+builder.Services.AddScoped<IGoogleIdTokenValidator, GoogleIdTokenValidator>();
+
+// --- JWT bearer authentication for [Authorize] endpoints (STOR-61 Phase 3) ---
+// Reuses JwtOptions (same key/issuer/audience as the issuer, mirrored exactly) so an access
+// token minted by /api/auth/otp/verify, /api/auth/google, or /api/auth/refresh is accepted by
+// /me, /sessions, /logout, and /logout-all with no extra configuration.
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()
+            ?? new JwtOptions();
+
+        // JwtOptions has already been validated by the AddOptions().ValidateOnStart() chain
+        // above; bail early here only on the impossible-config case so the host never starts.
+        if (!JwtOptions.IsValidSigningKey(jwtOptions.SigningKey))
+        {
+            throw new InvalidOperationException(
+                $"{JwtOptions.SectionName}:{nameof(JwtOptions.SigningKey)} must be at least {JwtOptions.MinimumSigningKeyLengthBytes} bytes for HMAC-SHA256 signing.");
+        }
+
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = jwtOptions.Issuer,
+            ValidateAudience = true,
+            ValidAudience = jwtOptions.Audience,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.SigningKey)),
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromMinutes(1),
+        };
+    });
+
+builder.Services.AddAuthorization();
 
 // --- OTP rate limiting: chained per-email fixed-window + per-IP token-bucket (STOR-61 Phase 2).
 // Read directly off configuration (rather than via the DI-resolved, validated IOptions<T>) purely
@@ -181,6 +227,13 @@ app.UseCors(FrontendDevCorsPolicy);
 // per-email partition-key function (which runs inside UseRateLimiter) can see the parsed body. ---
 app.UseOtpRateLimitEmailCapture();
 app.UseRateLimiter();
+
+// --- Authentication / authorization for [Authorize] endpoints (STOR-61 Phase 3). Must run
+// AFTER UseCors (so preflight CORS requests aren't asked for credentials they don't have) and
+// AFTER UseRateLimiter (so brute-force /me probing is rate-limited the same as /otp/*), and
+// BEFORE endpoint mapping. ---
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapIdentityEndpoints();
 

@@ -14,6 +14,9 @@ public static class DependencyInjection
     {
         services.AddResendEmailSender();
 
+        // STOR-61 Phase 3: FluentValidation validators for the new endpoints are discovered by
+        // the AddValidatorsFromAssembly(typeof(...).Assembly) call in Program.cs — no per-class
+        // registration needed.
         return services;
     }
 }

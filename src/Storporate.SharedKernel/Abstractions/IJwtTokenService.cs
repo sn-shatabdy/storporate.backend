@@ -19,4 +19,18 @@ public interface IJwtTokenService
         User user,
         string? userAgent,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Issues a new access + refresh token pair whose persisted <see cref="Session"/> belongs to
+    /// the same <paramref name="familyId"/> as an existing rotation chain. The new session's
+    /// <c>ReplacedBySessionId</c> link is wired back to <paramref name="replacedSessionId"/> so
+    /// presenting the rotated-out token again is detectable as reuse/theft (see the plan's
+    /// Phase 3 <c>RefreshSessionHandler</c>).
+    /// </summary>
+    Task<AuthTokenResult> IssueRotatedTokensAsync(
+        User user,
+        string? userAgent,
+        Guid familyId,
+        Guid replacedSessionId,
+        CancellationToken cancellationToken = default);
 }

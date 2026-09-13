@@ -69,6 +69,14 @@ public class GlobalExceptionHandlerTests
         [
             new ActorTypeRequiredException(), StatusCodes.Status400BadRequest, "actor_type_required",
         ];
+        yield return
+        [
+            new RefreshTokenInvalidException(), StatusCodes.Status401Unauthorized, "refresh_token_invalid",
+        ];
+        yield return
+        [
+            new GoogleLoginFailedException(), StatusCodes.Status401Unauthorized, "google_login_failed",
+        ];
     }
 
     private sealed class FakeHostEnvironment : IHostEnvironment

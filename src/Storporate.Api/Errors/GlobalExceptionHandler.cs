@@ -38,6 +38,10 @@ public sealed class GlobalExceptionHandler(
                 (StatusCodes.Status409Conflict, new ErrorResponse("email_already_registered", emailAlreadyRegisteredException.Message)),
             RefreshTokenReusedException refreshTokenReusedException =>
                 (StatusCodes.Status401Unauthorized, new ErrorResponse("refresh_token_reused", refreshTokenReusedException.Message)),
+            RefreshTokenInvalidException refreshTokenInvalidException =>
+                (StatusCodes.Status401Unauthorized, new ErrorResponse("refresh_token_invalid", refreshTokenInvalidException.Message)),
+            GoogleLoginFailedException googleLoginFailedException =>
+                (StatusCodes.Status401Unauthorized, new ErrorResponse("google_login_failed", googleLoginFailedException.Message)),
             ActorTypeRequiredException actorTypeRequiredException =>
                 (StatusCodes.Status400BadRequest, new ErrorResponse("actor_type_required", actorTypeRequiredException.Message)),
             _ => (StatusCodes.Status500InternalServerError, MapUnhandledError(exception)),

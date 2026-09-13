@@ -1,4 +1,6 @@
+using System.Security.Claims;
 using FluentValidation;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.RateLimiting;
@@ -71,5 +73,100 @@ public static class IdentityEndpoints
                     result.Tokens.RefreshTokenExpiresAt));
             })
             .RequireRateLimiting(OtpRateLimiterPolicy.PolicyName);
+
+        app.MapPost("/api/auth/google", async (
+                GoogleLoginRequest request,
+                IValidator<GoogleLoginRequest> validator,
+                HttpContext httpContext,
+                WriteDbContext dbContext,
+                IGoogleIdTokenValidator googleIdTokenValidator,
+                IJwtTokenService tokenService,
+                CancellationToken cancellationToken) =>
+            {
+                await validator.ValidateAndThrowAsync(request, cancellationToken);
+
+                var userAgent = httpContext.Request.Headers.UserAgent.ToString();
+                var result = await GoogleLoginHandler.ExecuteAsync(
+                    request.IdToken,
+                    request.ActorType,
+                    string.IsNullOrWhiteSpace(userAgent) ? null : userAgent,
+                    dbContext,
+                    googleIdTokenValidator,
+                    tokenService,
+                    cancellationToken);
+
+                return Results.Ok(new GoogleLoginResponse(
+                    result.User.Id,
+                    result.User.Email,
+                    result.User.ActorType,
+                    result.User.VerificationStatus,
+                    result.IsNewUser,
+                    result.Tokens.AccessToken,
+                    result.Tokens.AccessTokenExpiresAt,
+                    result.Tokens.RefreshToken,
+                    result.Tokens.RefreshTokenExpiresAt));
+            });
+
+        app.MapPost("/api/auth/refresh", async (
+                RefreshSessionRequest request,
+                IValidator<RefreshSessionRequest> validator,
+                HttpContext httpContext,
+                WriteDbContext dbContext,
+                IJwtTokenService tokenService,
+                CancellationToken cancellationToken) =>
+            {
+                await validator.ValidateAndThrowAsync(request, cancellationToken);
+
+                var userAgent = httpContext.Request.Headers.UserAgent.ToString();
+                var tokens = await RefreshSessionHandler.ExecuteAsync(
+                    request.RefreshToken,
+                    string.IsNullOrWhiteSpace(userAgent) ? null : userAgent,
+                    dbContext,
+                    tokenService,
+                    cancellationToken);
+
+                return Results.Ok(new RefreshSessionResponse(
+                    tokens.AccessToken,
+                    tokens.AccessTokenExpiresAt,
+                    tokens.RefreshToken,
+                    tokens.RefreshTokenExpiresAt));
+            });
+
+        app.MapPost("/api/auth/logout", async (
+                ClaimsPrincipal caller,
+                WriteDbContext dbContext,
+                CancellationToken cancellationToken) =>
+            {
+                await LogoutHandler.ExecuteAsync(caller, dbContext, cancellationToken);
+                return Results.NoContent();
+            })
+            .RequireAuthorization();
+
+        app.MapPost("/api/auth/logout-all", async (
+                ClaimsPrincipal caller,
+                WriteDbContext dbContext,
+                CancellationToken cancellationToken) =>
+            {
+                var revokedCount = await LogoutAllHandler.ExecuteAsync(caller, dbContext, cancellationToken);
+                return Results.Ok(new { revokedSessions = revokedCount });
+            })
+            .RequireAuthorization();
+
+        app.MapGet("/api/auth/me", (ClaimsPrincipal caller) =>
+            {
+                var response = GetCurrentUserHandler.Execute(caller);
+                return Results.Ok(response);
+            })
+            .RequireAuthorization();
+
+        app.MapGet("/api/auth/sessions", async (
+                ClaimsPrincipal caller,
+                WriteDbContext dbContext,
+                CancellationToken cancellationToken) =>
+            {
+                var response = await ListSessionsHandler.ExecuteAsync(caller, dbContext, cancellationToken);
+                return Results.Ok(response);
+            })
+            .RequireAuthorization();
     }
 }
