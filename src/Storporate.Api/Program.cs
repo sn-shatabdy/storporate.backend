@@ -1,14 +1,17 @@
 using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using Storporate.Api.Configuration;
 using Storporate.Api.Errors;
 using Storporate.Infrastructure.Llm;
 using Storporate.Infrastructure.Persistence;
+using Storporate.Infrastructure.Security;
 using Storporate.Infrastructure.Storage;
 using Storporate.Modules.PlatformFoundations;
 using Storporate.Modules.PlatformFoundations.Diagnostics;
 using Storporate.SharedKernel.Abstractions;
+using Storporate.SharedKernel.Security;
 using Storporate.SharedKernel.Storage;
 
 DotEnvLoader.LoadIfPresent();
@@ -45,11 +48,28 @@ builder.Services
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
+builder.Services
+    .AddOptions<FieldEncryptionOptions>()
+    .Bind(builder.Configuration.GetSection(FieldEncryptionOptions.SectionName))
+    .ValidateDataAnnotations()
+    .Validate(
+        options => AesGcmFieldEncryptor.IsValidKey(options.FieldEncryptionKey),
+        $"{FieldEncryptionOptions.SectionName}:{nameof(FieldEncryptionOptions.FieldEncryptionKey)} must be a base64-encoded 32-byte (AES-256) key.")
+    .ValidateOnStart();
+
 // --- Persistence ---
 builder.Services.AddDbContext<WriteDbContext>((serviceProvider, options) =>
 {
     var connectionStrings = serviceProvider.GetRequiredService<IOptions<ConnectionStringsOptions>>().Value;
-    options.UseNpgsql(connectionStrings.WriteDb);
+
+    // Layer the configured SSL mode onto the connection string rather than baking it into
+    // ConnectionStrings__WriteDb directly, so local dev's plaintext Docker Postgres and a future
+    // hosted Postgres that requires TLS can share the same base connection string shape.
+    var connectionStringBuilder = new NpgsqlConnectionStringBuilder(connectionStrings.WriteDb)
+    {
+        SslMode = Enum.Parse<SslMode>(connectionStrings.SslMode, ignoreCase: true)
+    };
+    options.UseNpgsql(connectionStringBuilder.ConnectionString);
 });
 
 // --- Modules ---
@@ -77,6 +97,13 @@ app.UseExceptionHandler();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+}
+
+// --- HSTS: tell browsers to remember HTTPS-only for this host. Skipped in Development so the
+// dev cert / plain-http loop never gets a lingering browser HSTS entry for localhost. ---
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHsts();
 }
 
 app.UseHttpsRedirection();

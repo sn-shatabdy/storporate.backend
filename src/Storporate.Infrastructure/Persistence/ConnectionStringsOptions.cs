@@ -13,4 +13,15 @@ public sealed class ConnectionStringsOptions
 
     [Required]
     public string WriteDb { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Npgsql SSL negotiation mode applied to <see cref="WriteDb"/> at startup (see
+    /// <c>Program.cs</c>, which layers this onto the connection string via
+    /// <c>NpgsqlConnectionStringBuilder</c>). Defaults to "Prefer", which negotiates plaintext
+    /// against today's non-TLS local Docker Postgres container (a no-op) and becomes a real
+    /// enforcement point (e.g. "Require"/"VerifyFull") once pointed at a hosted Postgres later.
+    /// Must be one of Npgsql's <see cref="Npgsql.SslMode"/> enum names.
+    /// </summary>
+    [AllowedValues("Disable", "Allow", "Prefer", "Require", "VerifyCA", "VerifyFull")]
+    public string SslMode { get; init; } = "Prefer";
 }
