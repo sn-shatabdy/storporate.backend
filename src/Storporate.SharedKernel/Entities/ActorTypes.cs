@@ -10,7 +10,7 @@ namespace Storporate.SharedKernel.Entities;
 public static class ActorTypes
 {
     public const string Student = "Student";
-    public const string Employer = "Employer";
-    public const string UniversityAdmin = "UniversityAdmin";
-    public const string ClubAdmin = "ClubAdmin";
+    public const string Organization = "Organization";
+    public const string University = "University";
+    public const string Club = "Club";
 }

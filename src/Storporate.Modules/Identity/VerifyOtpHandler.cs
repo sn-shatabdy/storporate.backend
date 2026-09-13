@@ -20,9 +20,9 @@ public static class VerifyOtpHandler
     private static readonly string[] ValidActorTypes =
     [
         ActorTypes.Student,
-        ActorTypes.Employer,
-        ActorTypes.UniversityAdmin,
-        ActorTypes.ClubAdmin,
+        ActorTypes.Organization,
+        ActorTypes.University,
+        ActorTypes.Club,
     ];
 
     public static async Task<VerifyOtpResult> ExecuteAsync(

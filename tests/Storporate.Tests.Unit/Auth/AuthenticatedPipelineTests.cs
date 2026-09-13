@@ -54,7 +54,7 @@ public class AuthenticatedPipelineTests : IClassFixture<AuthEndpointsFactory>
         var dbContext = scope.ServiceProvider.GetRequiredService<WriteDbContext>();
         var tokenService = scope.ServiceProvider.GetRequiredService<IJwtTokenService>();
 
-        var user = await SeedUserAsync(dbContext, "me-pipeline@example.com", ActorTypes.Employer, VerificationStatuses.Unverified);
+        var user = await SeedUserAsync(dbContext, "me-pipeline@example.com", ActorTypes.Organization, VerificationStatuses.Unverified);
         var tokens = await tokenService.IssueTokensAsync(user, "integration-test-agent", CancellationToken.None);
 
         using var client = _factory.CreateClient();
@@ -71,7 +71,7 @@ public class AuthenticatedPipelineTests : IClassFixture<AuthEndpointsFactory>
         Assert.NotNull(payload);
         Assert.Equal(user.Id, payload!.UserId);
         Assert.Equal("me-pipeline@example.com", payload.Email);
-        Assert.Equal(ActorTypes.Employer, payload.ActorType);
+        Assert.Equal(ActorTypes.Organization, payload.ActorType);
         Assert.Equal(VerificationStatuses.Unverified, payload.VerificationStatus);
     }
 

@@ -39,14 +39,14 @@ public class VerifyOtpHandlerTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_NewEmailWithEmployerActorType_CreatesUnverifiedUser()
+    public async Task ExecuteAsync_NewEmailWithOrganizationActorType_CreatesUnverifiedUser()
     {
         await using var dbContext = CreateDbContext();
         SeedOtpCode(dbContext, Email, Code);
         var tokenService = new FakeJwtTokenService();
 
         var result = await VerifyOtpHandler.ExecuteAsync(
-            Email, Code, ActorTypes.Employer, userAgent: null, dbContext, tokenService, CancellationToken.None);
+            Email, Code, ActorTypes.Organization, userAgent: null, dbContext, tokenService, CancellationToken.None);
 
         Assert.Equal(VerificationStatuses.Unverified, result.User.VerificationStatus);
     }
@@ -83,7 +83,7 @@ public class VerifyOtpHandlerTests
         {
             Id = Guid.NewGuid(),
             Email = Email,
-            ActorType = ActorTypes.Employer,
+            ActorType = ActorTypes.Organization,
             VerificationStatus = VerificationStatuses.Unverified,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
@@ -96,7 +96,7 @@ public class VerifyOtpHandlerTests
             Email, Code, actorType: null, userAgent: null, dbContext, tokenService, CancellationToken.None);
 
         Assert.False(result.IsNewUser);
-        Assert.Equal(ActorTypes.Employer, result.User.ActorType);
+        Assert.Equal(ActorTypes.Organization, result.User.ActorType);
     }
 
     [Fact]

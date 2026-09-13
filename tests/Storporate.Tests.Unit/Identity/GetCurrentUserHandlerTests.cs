@@ -16,13 +16,13 @@ public class GetCurrentUserHandlerTests
     public void Execute_ReturnsClaimsAsResponse()
     {
         var userId = Guid.NewGuid();
-        var caller = BuildPrincipal(userId, "alice@example.com", "Employer", "Unverified");
+        var caller = BuildPrincipal(userId, "alice@example.com", "Organization", "Unverified");
 
         var response = GetCurrentUserHandler.Execute(caller);
 
         Assert.Equal(userId, response.UserId);
         Assert.Equal("alice@example.com", response.Email);
-        Assert.Equal("Employer", response.ActorType);
+        Assert.Equal("Organization", response.ActorType);
         Assert.Equal("Unverified", response.VerificationStatus);
     }
 

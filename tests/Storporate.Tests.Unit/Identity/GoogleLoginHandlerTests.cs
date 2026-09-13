@@ -45,19 +45,19 @@ public class GoogleLoginHandlerTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_NewSubjectId_WithEmployerActorType_CreatesUnverifiedUser()
+    public async Task ExecuteAsync_NewSubjectId_WithOrganizationActorType_CreatesUnverifiedUser()
     {
         await using var dbContext = CreateDbContext();
         var googleValidator = new FakeGoogleIdTokenValidator
         {
-            SubjectId = "google-sub-employer",
-            Email = "employer@example.com",
+            SubjectId = "google-sub-organization",
+            Email = "organization@example.com",
         };
         var tokenService = new FakeJwtTokenService();
 
         var result = await GoogleLoginHandler.ExecuteAsync(
             idToken: "test-id-token",
-            actorType: ActorTypes.Employer,
+            actorType: ActorTypes.Organization,
             userAgent: null,
             dbContext,
             googleValidator,
@@ -93,7 +93,7 @@ public class GoogleLoginHandlerTests
         {
             Id = Guid.NewGuid(),
             Email = "returning@example.com",
-            ActorType = ActorTypes.Employer,
+            ActorType = ActorTypes.Organization,
             GoogleSubjectId = "google-sub-returning",
             VerificationStatus = VerificationStatuses.Unverified,
             CreatedAt = DateTime.UtcNow,
@@ -112,7 +112,7 @@ public class GoogleLoginHandlerTests
             "test-id-token", actorType: null, null, dbContext, googleValidator, tokenService, CancellationToken.None);
 
         Assert.False(result.IsNewUser);
-        Assert.Equal(ActorTypes.Employer, result.User.ActorType);
+        Assert.Equal(ActorTypes.Organization, result.User.ActorType);
     }
 
     [Fact]
