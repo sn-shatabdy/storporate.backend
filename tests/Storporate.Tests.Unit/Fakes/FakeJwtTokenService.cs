@@ -32,7 +32,7 @@ public sealed class FakeJwtTokenService : IJwtTokenService
         return Task.FromResult(result);
     }
 
-    public Task<AuthTokenResult> IssueRotatedTokensAsync(
+    public Task<AuthTokenResult?> IssueRotatedTokensAsync(
         User user,
         string? userAgent,
         Guid familyId,
@@ -47,6 +47,6 @@ public sealed class FakeJwtTokenService : IJwtTokenService
             RefreshToken: $"fake-refresh-rotated-{_invocationCount}",
             RefreshTokenExpiresAt: now.AddDays(7));
         IssuedTokens.Add(result);
-        return Task.FromResult(result);
+        return Task.FromResult<AuthTokenResult?>(result);
     }
 }

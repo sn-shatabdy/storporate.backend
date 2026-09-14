@@ -139,6 +139,7 @@ public class GoogleLoginHandlerTests
         {
             SubjectId = "google-sub-linking",
             Email = "linking@example.com",
+            EmailVerified = true,
         };
         var tokenService = new FakeJwtTokenService();
 
@@ -148,6 +149,53 @@ public class GoogleLoginHandlerTests
         Assert.False(result.IsNewUser);
         Assert.Equal("google-sub-linking", result.User.GoogleSubjectId);
         Assert.Single(await dbContext.Users.ToListAsync());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_OtpOnlyAccountLinkingGoogleWithUnverifiedEmail_ThrowsAndDoesNotMutateUser()
+    {
+        // Security regression (Cross-Validation, STOR-61): if Google returns email_verified=false
+        // for a token whose email matches an existing OTP-created account, the handler must NOT
+        // auto-link — Google has not confirmed the caller controls this email address, and
+        // silently attaching the new Google identity would be an account-takeover vector. The
+        // existing user must be left exactly as it was (no GoogleSubjectId written, no
+        // UpdatedAt touched) and the sign-in must fail with a clear, distinct exception so the
+        // caller is steered back to the email-OTP path they already proved ownership with.
+        await using var dbContext = CreateDbContext();
+        var userId = Guid.NewGuid();
+        var originalUpdatedAt = DateTime.UtcNow.AddMinutes(-5);
+        dbContext.Users.Add(new User
+        {
+            Id = userId,
+            Email = "victim@example.com",
+            ActorType = ActorTypes.Student,
+            GoogleSubjectId = null,
+            VerificationStatus = VerificationStatuses.Verified,
+            CreatedAt = originalUpdatedAt,
+            UpdatedAt = originalUpdatedAt,
+        });
+        await dbContext.SaveChangesAsync();
+
+        var googleValidator = new FakeGoogleIdTokenValidator
+        {
+            SubjectId = "google-sub-attacker",
+            Email = "victim@example.com",
+            EmailVerified = false,
+        };
+        var tokenService = new FakeJwtTokenService();
+
+        await Assert.ThrowsAsync<GoogleEmailNotVerifiedException>(() =>
+            GoogleLoginHandler.ExecuteAsync(
+                "test-id-token", null, null, dbContext, googleValidator, tokenService, CancellationToken.None));
+
+        // No mutation of the existing user record at all.
+        var reloaded = await dbContext.Users.SingleAsync(u => u.Email == "victim@example.com");
+        Assert.Null(reloaded.GoogleSubjectId);
+        Assert.Equal(originalUpdatedAt, reloaded.UpdatedAt);
+
+        // No new user created, no tokens issued.
+        Assert.Single(await dbContext.Users.ToListAsync());
+        Assert.Equal(0, tokenService.IssueCount);
     }
 
     [Fact]

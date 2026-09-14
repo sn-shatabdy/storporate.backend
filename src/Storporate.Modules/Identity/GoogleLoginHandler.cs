@@ -92,6 +92,17 @@ public static class GoogleLoginHandler
             else
             {
                 // Returning email-OTP-only account is linking Google for the first time.
+                // Security: only auto-link when Google has actually verified this email — the
+                // OTP path has already established ownership, so for a new Google sign-in to
+                // attach itself to that account, Google itself must confirm the caller controls
+                // this email. Without that, this code would happily bind an attacker's Google
+                // identity to a victim account whose email the attacker happened to claim on
+                // some other Google-linked service.
+                if (!googleIdentity.EmailVerified)
+                {
+                    throw new GoogleEmailNotVerifiedException();
+                }
+
                 user.GoogleSubjectId = googleIdentity.GoogleSubjectId;
                 user.UpdatedAt = now;
                 // Found via email-fallback — not a brand-new user.

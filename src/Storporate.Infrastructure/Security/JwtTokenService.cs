@@ -60,7 +60,7 @@ public sealed class JwtTokenService(
         return new AuthTokenResult(accessToken, accessTokenExpiresAt, refreshToken, refreshTokenExpiresAt);
     }
 
-    public async Task<AuthTokenResult> IssueRotatedTokensAsync(
+    public async Task<AuthTokenResult?> IssueRotatedTokensAsync(
         User user,
         string? userAgent,
         Guid familyId,
@@ -91,17 +91,27 @@ public sealed class JwtTokenService(
             UpdatedAt = now,
         };
 
-        var replacedSession = await dbContext.Sessions.FirstOrDefaultAsync(
-            s => s.Id == replacedSessionId,
-            cancellationToken);
-        if (replacedSession is null)
-        {
-            throw new InvalidOperationException(
-                $"Session to be replaced ({replacedSessionId}) was not found in the database.");
-        }
+        // Atomic claim: only the caller whose UPDATE actually flips ReplacedBySessionId from
+        // NULL to a new value gets to mint a successor session. Concurrent refresh attempts
+        // presenting the same still-valid refresh token both reach this line, but only one
+        // succeeds (default Postgres READ COMMITTED protects the WHERE filter via the row
+        // lock taken by ExecuteUpdateAsync); the loser sees rowsAffected == 0 and returns
+        // null so RefreshSessionHandler can revoke the entire family as if reuse had been
+        // detected.
+        var rowsAffected = await dbContext.Sessions
+            .Where(s => s.Id == replacedSessionId && s.ReplacedBySessionId == null)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(s => s.ReplacedBySessionId, newSessionId)
+                    .SetProperty(s => s.UpdatedAt, now),
+                cancellationToken);
 
-        replacedSession.ReplacedBySessionId = newSessionId;
-        replacedSession.UpdatedAt = now;
+        if (rowsAffected == 0)
+        {
+            // Another concurrent caller already won the race for this session, OR the session
+            // does not exist. Either way: caller must treat this as reuse/theft.
+            return null;
+        }
 
         var accessToken = CreateAccessToken(user, jwtOptions, now, accessTokenExpiresAt, newSessionId);
 

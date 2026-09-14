@@ -77,6 +77,10 @@ public class GlobalExceptionHandlerTests
         [
             new GoogleLoginFailedException(), StatusCodes.Status401Unauthorized, "google_login_failed",
         ];
+        yield return
+        [
+            new GoogleEmailNotVerifiedException(), StatusCodes.Status409Conflict, "google_email_not_verified",
+        ];
     }
 
     private sealed class FakeHostEnvironment : IHostEnvironment

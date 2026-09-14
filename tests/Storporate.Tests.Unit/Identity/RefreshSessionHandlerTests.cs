@@ -117,6 +117,72 @@ public class RefreshSessionHandlerTests
                 "never-issued-token", null, dbContext, tokenService, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task ExecuteAsync_RotationLosesRace_RevokesEntireFamily_AndThrowsRefreshTokenReused()
+    {
+        // Security regression (Cross-Validation, STOR-61): refresh-token rotation has a TOCTOU
+        // race where two concurrent refresh calls presenting the exact same still-valid token
+        // could both pass the handler's "ReplacedBySessionId is null" check before either write
+        // lands, producing two successor sessions and never triggering reuse/theft detection.
+        // The fix makes the claim atomic in JwtTokenService.IssueRotatedTokensAsync — when the
+        // claim loses, the method returns null and the handler must revoke the entire family
+        // and throw RefreshTokenReusedException, identically to the explicit-reuse branch
+        // (a raced loser is indistinguishable from a knowing token-reuse attacker from the
+        // system's perspective).
+        //
+        // The InMemory provider used by these unit tests cannot execute the production
+        // ExecuteUpdateAsync atomic claim directly, so this test exercises the handler's
+        // reaction to the "claim lost" signal via a RaceLosingJwtTokenService fake that
+        // mirrors the production null-return behaviour. The atomic-claim correctness in
+        // production (where Postgres serialises concurrent UPDATEs) is covered by inspection
+        // of JwtTokenService.IssueRotatedTokensAsync's WHERE filter.
+        await using var dbContext = CreateDbContext();
+        var (user, originalSession) = SeedActiveSession(dbContext);
+        var tokenService = new RaceLosingJwtTokenService();
+
+        await Assert.ThrowsAsync<RefreshTokenReusedException>(() =>
+            RefreshSessionHandler.ExecuteAsync(
+                PlaintextRefreshToken, null, dbContext, tokenService, CancellationToken.None));
+
+        // The raced-loser must be treated identically to a knowing token-reuse attacker:
+        // the original session is revoked (so it cannot be replayed again) and no new
+        // successor session exists (the rotation "lost" produced nothing).
+        var reloadedOriginal = await dbContext.Sessions.SingleAsync(s => s.Id == originalSession.Id);
+        Assert.NotNull(reloadedOriginal.RevokedAt);
+
+        var familySessions = await dbContext.Sessions
+            .Where(s => s.FamilyId == originalSession.FamilyId)
+            .ToListAsync();
+        Assert.Single(familySessions);
+        Assert.Equal(originalSession.Id, familySessions[0].Id);
+
+        Assert.Equal(1, tokenService.IssueRotatedCalls);
+    }
+
+    [Fact]
+    public async Task RecordingJwtTokenService_IssueRotatedTokensAsync_WhenSessionAlreadyClaimed_ReturnsNull()
+    {
+        // Direct unit test for the in-process equivalent of the production atomic claim:
+        // when the original session's ReplacedBySessionId is already set, the service must
+        // detect the collision and return null so the handler revokes the family. This is
+        // the InMemory-provider analogue of the production ExecuteUpdateAsync returning
+        // rowsAffected == 0.
+        await using var dbContext = CreateDbContext();
+        var (user, originalSession) = SeedActiveSession(dbContext);
+
+        // Simulate the winner's claim having landed.
+        originalSession.ReplacedBySessionId = Guid.NewGuid();
+        originalSession.UpdatedAt = DateTime.UtcNow;
+        await dbContext.SaveChangesAsync();
+
+        var tokenService = new RecordingJwtTokenService(dbContext);
+
+        var result = await tokenService.IssueRotatedTokensAsync(
+            user, null, originalSession.FamilyId, originalSession.Id, CancellationToken.None);
+
+        Assert.Null(result);
+    }
+
     private static (User user, Session session) SeedActiveSession(WriteDbContext dbContext)
     {
         var user = new User

@@ -27,7 +27,11 @@ public interface IJwtTokenService
     /// presenting the rotated-out token again is detectable as reuse/theft (see the plan's
     /// Phase 3 <c>RefreshSessionHandler</c>).
     /// </summary>
-    Task<AuthTokenResult> IssueRotatedTokensAsync(
+    /// <returns>The newly-issued token pair, or <c>null</c> if a concurrent caller already
+    /// claimed <paramref name="replacedSessionId"/> for rotation (a race whose only safe
+    /// resolution is to revoke the entire <paramref name="familyId"/> as if reuse had been
+    /// detected — see <c>RefreshSessionHandler</c>).</returns>
+    Task<AuthTokenResult?> IssueRotatedTokensAsync(
         User user,
         string? userAgent,
         Guid familyId,

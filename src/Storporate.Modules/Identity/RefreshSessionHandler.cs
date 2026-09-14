@@ -70,14 +70,26 @@ public static class RefreshSessionHandler
             throw new RefreshTokenInvalidException();
         }
 
-        // Step 4: rotate. IssueRotatedTokensAsync sets ReplacedBySessionId on `session` and
-        // adds a new Session row in the same FamilyId, committing both atomically.
-        return await tokenService.IssueRotatedTokensAsync(
+        // Step 4: rotate. IssueRotatedTokensAsync atomically claims this session for rotation
+        // (sets ReplacedBySessionId) and inserts a new Session row in the same FamilyId.
+        // If two concurrent refresh calls both reach this line with the same still-valid
+        // token, only one wins the atomic UPDATE — the other sees the claim as already taken
+        // (a raced loser, indistinguishable from a knowing token-reuse attacker) and must be
+        // treated identically: revoke the entire family, then throw.
+        var tokens = await tokenService.IssueRotatedTokensAsync(
             session.User,
             userAgent,
             session.FamilyId,
             session.Id,
             cancellationToken);
+
+        if (tokens is null)
+        {
+            await RevokeEntireFamilyAsync(dbContext, session.FamilyId, now, cancellationToken);
+            throw new RefreshTokenReusedException();
+        }
+
+        return tokens;
     }
 
     /// <summary>Revokes every non-revoked session in <paramref name="familyId"/>, stamping

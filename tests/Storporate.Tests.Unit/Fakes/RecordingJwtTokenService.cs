@@ -56,7 +56,7 @@ public sealed class RecordingJwtTokenService(WriteDbContext dbContext) : IJwtTok
         return Task.FromResult(result);
     }
 
-    public async Task<AuthTokenResult> IssueRotatedTokensAsync(
+    public async Task<AuthTokenResult?> IssueRotatedTokensAsync(
         User user,
         string? userAgent,
         Guid familyId,
@@ -86,6 +86,15 @@ public sealed class RecordingJwtTokenService(WriteDbContext dbContext) : IJwtTok
         {
             throw new InvalidOperationException(
                 $"Session to be replaced ({replacedSessionId}) was not found.");
+        }
+
+        // Mirrors JwtTokenService.IssueRotatedTokensAsync's atomic-claim semantics (with the
+        // same InMemory caveat: this is a read-then-set, not a true SQL UPDATE, so it does not
+        // itself prevent concurrent racing — the handler-level test for the race-loss branch
+        // exercises it by pre-setting ReplacedBySessionId, not by racing real threads).
+        if (replacedSession.ReplacedBySessionId is not null)
+        {
+            return null;
         }
 
         replacedSession.ReplacedBySessionId = newSession.Id;
