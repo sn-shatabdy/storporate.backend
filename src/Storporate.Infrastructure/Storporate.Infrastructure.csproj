@@ -1,6 +1,13 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <!-- STOR-61 Phase 2: OTP rate limiting needs Microsoft.AspNetCore.RateLimiting/HttpContext,
+         and ResendEmailSender needs IHostEnvironment — both ship via the ASP.NET Core shared
+         framework rather than as discrete NuGet packages. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Storporate.SharedKernel\Storporate.SharedKernel.csproj" />
   </ItemGroup>
 
@@ -13,7 +20,12 @@
     </PackageReference>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.10" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
-    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0" />
+    <!-- Microsoft.Extensions.Http is now supplied by the Microsoft.AspNetCore.App
+         FrameworkReference above (added for RateLimiting/HttpContext/IHostEnvironment); an
+         explicit PackageReference to it is redundant and blocked by NuGet's package-pruning. -->
+    <PackageReference Include="Google.Apis.Auth" Version="1.71.0" />
+    <PackageReference Include="Resend" Version="0.17.0" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.22.0" />
   </ItemGroup>
 
 </Project>

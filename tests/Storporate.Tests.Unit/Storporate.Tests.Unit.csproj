@@ -6,9 +6,17 @@
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.10" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <!-- STOR-61 Phase 2: handler tests exercise WriteDbContext against a real (in-memory) EF Core
+         provider. Microsoft.Extensions.Configuration's in-memory provider and DI/Options types
+         used by the Options-validation tests come transitively via the Storporate.Api project
+         reference below (Microsoft.NET.Sdk.Web, which carries a FrameworkReference to
+         Microsoft.AspNetCore.App) — Microsoft.Extensions.Configuration.InMemory/.Memory are no
+         longer separately distributed NuGet packages on this SDK. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.10" />
   </ItemGroup>
 
   <ItemGroup>
@@ -17,6 +25,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Storporate.SharedKernel\Storporate.SharedKernel.csproj" />
+    <ProjectReference Include="..\..\src\Storporate.Api\Storporate.Api.csproj" />
   </ItemGroup>
 
 </Project>

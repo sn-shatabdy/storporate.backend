@@ -26,6 +26,7 @@ public class ModuleIsolationTests
         "InstitutionalClubNetwork",
         "PlatformFoundations",
         "SecurityGovernance",
+        "Identity",
     ];
 
     public static IEnumerable<object[]> ModuleNameTheoryData() =>
