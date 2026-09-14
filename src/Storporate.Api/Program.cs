@@ -17,6 +17,7 @@ using Storporate.Infrastructure.Security.RateLimiting;
 using Storporate.Infrastructure.Storage;
 using Storporate.Modules.Identity;
 using Storporate.Modules.PlatformFoundations;
+using Storporate.Modules.SecurityGovernance;
 using Storporate.Modules.PlatformFoundations.Diagnostics;
 using Storporate.SharedKernel.Abstractions;
 using Storporate.SharedKernel.Security;
@@ -116,6 +117,7 @@ builder.Services.AddDbContext<WriteDbContext>((serviceProvider, options) =>
 // --- Modules ---
 builder.Services.AddPlatformFoundationsHandlers();
 builder.Services.AddIdentityHandlers();
+builder.Services.AddSecurityGovernanceHandlers();
 
 // --- AI provider (Bionic-hosted local LLM, OpenAI-compatible) ---
 builder.Services.AddBionicLlmProvider();
