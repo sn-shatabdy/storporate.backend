@@ -22,38 +22,11 @@ public sealed class WriteDbContext(DbContextOptions<WriteDbContext> options) : D
     {
         base.OnModelCreating(modelBuilder);
 
-        // STOR-61's new entities use standalone IEntityTypeConfiguration classes (see
-        // Persistence/Configurations/) rather than the inline style below, which predates them.
+        // All entity mappings live as standalone IEntityTypeConfiguration classes
+        // (see Persistence/Configurations/), applied explicitly here.
         modelBuilder.ApplyConfiguration(new UserConfiguration());
         modelBuilder.ApplyConfiguration(new OtpCodeConfiguration());
         modelBuilder.ApplyConfiguration(new SessionConfiguration());
-
-        modelBuilder.Entity<Job>(entity =>
-        {
-            entity.ToTable("Jobs");
-
-            entity.HasKey(job => job.Id);
-
-            entity.Property(job => job.Type)
-                .IsRequired();
-
-            entity.Property(job => job.PayloadJson)
-                .HasColumnType("jsonb")
-                .IsRequired();
-
-            entity.Property(job => job.Status)
-                .IsRequired();
-
-            entity.Property(job => job.ErrorMessage)
-                .HasColumnType("text");
-
-            entity.Property(job => job.CreatedAt)
-                .IsRequired();
-
-            entity.Property(job => job.UpdatedAt)
-                .IsRequired();
-
-            entity.HasIndex(job => job.Status);
-        });
+        modelBuilder.ApplyConfiguration(new JobConfiguration());
     }
 }
