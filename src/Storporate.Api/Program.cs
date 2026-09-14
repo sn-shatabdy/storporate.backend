@@ -7,8 +7,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
+using Storporate.Api.Authorization;
 using Storporate.Api.Configuration;
 using Storporate.Api.Errors;
+using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Email;
 using Storporate.Infrastructure.Llm;
 using Storporate.Infrastructure.Persistence;
@@ -174,6 +176,7 @@ builder.Services
     });
 
 builder.Services.AddAuthorization();
+builder.Services.AddAuthorizationPolicies();
 
 // --- OTP rate limiting: chained per-email fixed-window + per-IP token-bucket (STOR-61 Phase 2).
 // Read directly off configuration (rather than via the DI-resolved, validated IOptions<T>) purely
@@ -245,6 +248,14 @@ app.UseRateLimiter();
 // AFTER UseRateLimiter (so brute-force /me probing is rate-limited the same as /otp/*), and
 // BEFORE endpoint mapping. ---
 app.UseAuthentication();
+
+// --- STOR-62 Phase 3: ambient account context. Sits between UseAuthentication() (so the JWT
+// sub/actor_type claims are already on HttpContext.User) and UseAuthorization() (so every
+// RequirePermission gate resolves against the populated IAccountContext). The route-value
+// lookup for {accountId} also needs routing to have run, which UseAuthentication above
+// implicitly triggers in modern WebApplication pipelines. ---
+app.UseAccountContext();
+
 app.UseAuthorization();
 
 app.MapIdentityEndpoints();
