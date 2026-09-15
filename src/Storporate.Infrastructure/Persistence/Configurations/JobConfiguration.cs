@@ -52,7 +52,7 @@ public sealed class JobConfiguration : IEntityTypeConfiguration<Job>
 
         builder.HasIndex(job => job.Status);
 
-        // Supports the global query filter the Phase 4 interceptor story installs.
+        // Supports the global query filter installed in WriteDbContext.OnModelCreating.
         builder.HasIndex(job => job.AccountId);
 
         builder.HasOne(job => job.Account)

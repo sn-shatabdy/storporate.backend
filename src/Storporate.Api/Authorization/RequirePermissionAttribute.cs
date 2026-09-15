@@ -81,11 +81,10 @@ public sealed class RequirePermissionAttribute : Attribute, IAuthorizeData
                 nameof(permission));
         }
 
-        // Setting Policy in the ctor (and leaving it mutable for IAuthorizeData's interface
-        // contract) means the value is on the attribute instance the moment it lands on the
-        // endpoint's Metadata list — important for the Phase 6 coverage test, which reflects
-        // over RequirePermissionAttribute instances on the EndpointDataSource rather than
-        // re-resolving through the policy provider.
+        // Policy is set in the ctor and left mutable for IAuthorizeData's interface
+        // contract; the value lands on the endpoint's Metadata list at this point so the
+        // permission-coverage test can find the attribute by type without re-resolving
+        // through the policy provider.
         Policy = PolicyPrefix + permission;
     }
 }

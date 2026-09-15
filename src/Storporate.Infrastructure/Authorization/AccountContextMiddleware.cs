@@ -55,24 +55,21 @@ public static class AccountContextMiddleware
             var writer = context.RequestServices
                 .GetRequiredService<IAccountContextWriter>();
 
-            // 1. UserId from the JWT sub claim. MapInboundClaims = false (set in Program.cs's
-            //    AddJwtBearer block) means this lookup finds the raw "sub" claim rather than
-            //    a remapped ClaimTypes.NameIdentifier.
+            // MapInboundClaims = false (set in Program.cs's AddJwtBearer block) means this
+            // lookup finds the raw "sub" claim rather than a remapped ClaimTypes.NameIdentifier.
             var subClaim = context.User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
             if (Guid.TryParse(subClaim, out var userId))
             {
                 writer.SetUserId(userId);
             }
 
-            // 2. IsAdministrator from the JWT actor_type claim. Same rationale as sub:
-            //    trusting the signed claim avoids a per-request DB round-trip and stays
-            //    fresh as long as the access token itself stays fresh.
+            // Trusting the signed actor_type claim avoids a per-request DB round-trip and
+            // stays fresh as long as the access token itself stays fresh.
             var actorTypeClaim = context.User.FindFirst(ActorTypeClaimType)?.Value;
             writer.SetIsAdministrator(string.Equals(actorTypeClaim, ActorTypes.Administrator, StringComparison.Ordinal));
 
-            // 3. AccountId from an {accountId} route value, when one is present. Endpoint
-            //    metadata is only fully populated after routing runs (UseRouting), so the
-            //    middleware must run after that too — see Program.cs's pipeline ordering.
+            // Endpoint metadata is only fully populated after routing runs (UseRouting), so
+            // this middleware must run after that too — see Program.cs's pipeline ordering.
             if (context.GetRouteValue(AccountIdRouteParameterName) is string accountIdText
                 && Guid.TryParse(accountIdText, out var accountId))
             {

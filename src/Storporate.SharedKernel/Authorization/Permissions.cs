@@ -61,9 +61,8 @@ public static class Permissions
                     continue;
                 }
 
-                // SortedSet.Add returns false on duplicates rather than throwing — that gives
-                // us a free dedupe + a stable error site if a future contributor accidentally
-                // shadows an existing permission string across two nested classes.
+                // SortedSet.Add returns false on duplicates; throw to give a stable error
+                // site if a future contributor shadows a permission across two nested classes.
                 if (!seen.Add(value))
                 {
                     throw new InvalidOperationException(

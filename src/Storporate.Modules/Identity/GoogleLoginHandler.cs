@@ -18,22 +18,11 @@ public static class GoogleLoginHandler
 {
     /// <summary>
     /// Actor types a brand-new user is allowed to register as via <c>/api/auth/google</c>.
-    /// Deliberately excludes <see cref="ActorTypes.Administrator"/> — Administrators are
-    /// platform-staff accounts that bypass workspace isolation (see the STOR-62 plan) and
-    /// must be provisioned out-of-band, never self-registered through a public auth flow.
-    /// Exposed publicly so a regression test can lock down the invariant
-    /// (<c>GoogleLoginHandlerTests.ValidActorTypes_DoesNotIncludeAdministrator</c>); a future
-    /// auth path that forgets to filter Administrator would otherwise pass code review and
-    /// silently grant an attacker the bypass role.
+    /// Shared with <see cref="VerifyOtpHandler.ValidActorTypes"/> via
+    /// <see cref="IdentityAllowedActorTypes.Set"/> so a future auth path can't drift and let
+    /// <see cref="ActorTypes.Administrator"/> through.
     /// </summary>
-    public static readonly IReadOnlySet<string> ValidActorTypes =
-        new HashSet<string>(StringComparer.Ordinal)
-        {
-            ActorTypes.Student,
-            ActorTypes.Organization,
-            ActorTypes.University,
-            ActorTypes.Club,
-        };
+    public static readonly IReadOnlySet<string> ValidActorTypes = IdentityAllowedActorTypes.Set;
 
     public static async Task<GoogleLoginResult> ExecuteAsync(
         string idToken,

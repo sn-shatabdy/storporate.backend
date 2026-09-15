@@ -30,8 +30,7 @@ namespace Storporate.Infrastructure.Authorization;
 public sealed class AmbientAccountContext : IAccountContext, IAccountContextWriter
 {
     // Three independent AsyncLocals rather than one struct-typed one — simpler semantics
-    // around "set AccountId but leave UserId alone" (the middleware does exactly this when
-    // an {accountId} route value is present but the JWT subject is already validated).
+    // around "set AccountId but leave UserId alone".
     private readonly AsyncLocal<Guid?> _userId = new();
     private readonly AsyncLocal<Guid?> _accountId = new();
     private readonly AsyncLocal<bool> _isAdministrator = new();

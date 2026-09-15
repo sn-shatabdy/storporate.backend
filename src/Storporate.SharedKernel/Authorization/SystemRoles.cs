@@ -29,25 +29,25 @@ public static class SystemRoles
 {
     /// <summary>Self-service learner account — can apply to / browse jobs but does not post
     /// them.</summary>
-    public const string Student = "Student";
+    public static readonly string Student = ActorTypes.Student;
 
     /// <summary>Hiring-side account — posts and manages the <see cref="Entities.Job"/> rows
     /// they own.</summary>
-    public const string Organization = "Organization";
+    public static readonly string Organization = ActorTypes.Organization;
 
     /// <summary>Institution-side account — typically a posting or sponsorship source rather
     /// than a hiring party; read-only on <see cref="Entities.Job"/> for now.</summary>
-    public const string University = "University";
+    public static readonly string University = ActorTypes.University;
 
     /// <summary>Community / club account — same shape as <see cref="University"/> for STOR-62:
     /// read-only on <see cref="Entities.Job"/>. Narrowed / widened by a future story when a
     /// concrete Club-domain permission arrives.</summary>
-    public const string Club = "Club";
+    public static readonly string Club = ActorTypes.Club;
 
     /// <summary>Platform-staff role. Deliberately bypasses workspace isolation (see
     /// <see cref="ActorTypes"/> class remarks) and gets the full permission set so it can
     /// read / write every account's data for support and moderation.</summary>
-    public const string Administrator = "Administrator";
+    public static readonly string Administrator = ActorTypes.Administrator;
 
     /// <summary>
     /// Human-readable descriptions of each role. Used by diagnostics / future admin tooling
@@ -55,11 +55,11 @@ public static class SystemRoles
     /// </summary>
     public static readonly IReadOnlyDictionary<string, string> Descriptions = new Dictionary<string, string>
     {
-        [Student] = "Self-service learner account — applies to and browses jobs.",
-        [Organization] = "Hiring-side account — posts and manages job listings.",
-        [University] = "Institution-side account — sponsors / surfaces opportunities.",
-        [Club] = "Community / club account — engages with the platform's discovery surfaces.",
-        [Administrator] = "Platform staff — bypasses workspace isolation by design.",
+        [ActorTypes.Student] = "Self-service learner account — applies to and browses jobs.",
+        [ActorTypes.Organization] = "Hiring-side account — posts and manages job listings.",
+        [ActorTypes.University] = "Institution-side account — sponsors / surfaces opportunities.",
+        [ActorTypes.Club] = "Community / club account — engages with the platform's discovery surfaces.",
+        [ActorTypes.Administrator] = "Platform staff — bypasses workspace isolation by design.",
     };
 
     /// <summary>

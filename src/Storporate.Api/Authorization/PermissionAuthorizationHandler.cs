@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Storporate.Infrastructure.Authorization;
 using Storporate.SharedKernel.Authorization;
 
@@ -36,13 +37,16 @@ public sealed class PermissionAuthorizationHandler : AuthorizationHandler<Permis
 {
     private readonly IAccountContext _accountContext;
     private readonly IPermissionService _permissionService;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
     public PermissionAuthorizationHandler(
         IAccountContext accountContext,
-        IPermissionService permissionService)
+        IPermissionService permissionService,
+        IHttpContextAccessor httpContextAccessor)
     {
         _accountContext = accountContext;
         _permissionService = permissionService;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     protected override async Task HandleRequirementAsync(
@@ -75,16 +79,16 @@ public sealed class PermissionAuthorizationHandler : AuthorizationHandler<Permis
         // AccountContextMiddleware write the route value into the ambient state.
         var accountId = _accountContext.AccountId ?? userId.Value;
 
-        // AuthorizationHandlerContext has no direct hook to the per-request CancellationToken;
-        // for Phase 3 the only call site is the in-process default policy-provider flow, and
-        // its one DB lookup is short, so we forward CancellationToken.None. A future story
-        // that needs cooperative cancel can thread HttpContext.RequestAborted in by switching
-        // the handler to a constructor-injected IHttpContextAccessor.
+        // Forward the request's CancellationToken so a client disconnect cancels the DB
+        // lookup. IHttpContextAccessor is already registered in the host (see
+        // AuthorizationPoliciesExtensions), so there's no DI cost to taking it here.
+        var cancellationToken = _httpContextAccessor.HttpContext?.RequestAborted ?? CancellationToken.None;
+
         var hasPermission = await _permissionService.HasPermissionAsync(
             userId.Value,
             accountId,
             requirement.Permission,
-            CancellationToken.None);
+            cancellationToken);
 
         if (hasPermission)
         {

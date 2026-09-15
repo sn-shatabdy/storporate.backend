@@ -164,10 +164,6 @@ public sealed class RowLevelSecurityInterceptor : SaveChangesInterceptor, IDbCon
         }
     }
 
-    /// <summary>
-    /// Synchronous Postgres GUC writer. Skipped under non-Npgsql providers so the same
-    /// interceptor is correct for both production and the in-memory test suite.
-    /// </summary>
     private void ApplyPostgresGucs(DbConnection connection)
     {
         if (connection is not NpgsqlConnection npgsqlConnection)
@@ -175,24 +171,10 @@ public sealed class RowLevelSecurityInterceptor : SaveChangesInterceptor, IDbCon
             return;
         }
 
-        using var command = npgsqlConnection.CreateCommand();
-        command.CommandText =
-            "SELECT set_config('app.account_id', @accountId, false), "
-            + "set_config('app.user_id', @userId, false), "
-            + "set_config('app.is_admin', @isAdmin, false);";
-
-        // NpgsqlConnection.CreateCommand() returns NpgsqlCommand; AddWithValue is the
-        // ergonomic wrapper that infers the parameter type from the value.
-        command.Parameters.AddWithValue("@accountId", _accountContext.AccountId?.ToString() ?? string.Empty);
-        command.Parameters.AddWithValue("@userId", _accountContext.UserId?.ToString() ?? string.Empty);
-        command.Parameters.AddWithValue("@isAdmin", _accountContext.IsAdministrator ? "true" : "false");
-
+        using var command = BuildGucSetCommand(npgsqlConnection);
         command.ExecuteNonQuery();
     }
 
-    /// <summary>
-    /// Async counterpart to <see cref="ApplyPostgresGucs"/>. Same body, same skip rule.
-    /// </summary>
     private async Task ApplyPostgresGucsAsync(DbConnection connection, CancellationToken cancellationToken)
     {
         if (connection is not NpgsqlConnection npgsqlConnection)
@@ -200,16 +182,20 @@ public sealed class RowLevelSecurityInterceptor : SaveChangesInterceptor, IDbCon
             return;
         }
 
-        await using var command = npgsqlConnection.CreateCommand();
+        await using var command = BuildGucSetCommand(npgsqlConnection);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private NpgsqlCommand BuildGucSetCommand(NpgsqlConnection npgsqlConnection)
+    {
+        var command = npgsqlConnection.CreateCommand();
         command.CommandText =
             "SELECT set_config('app.account_id', @accountId, false), "
             + "set_config('app.user_id', @userId, false), "
             + "set_config('app.is_admin', @isAdmin, false);";
-
         command.Parameters.AddWithValue("@accountId", _accountContext.AccountId?.ToString() ?? string.Empty);
         command.Parameters.AddWithValue("@userId", _accountContext.UserId?.ToString() ?? string.Empty);
         command.Parameters.AddWithValue("@isAdmin", _accountContext.IsAdministrator ? "true" : "false");
-
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        return command;
     }
 }
