@@ -18,13 +18,16 @@ namespace Storporate.Infrastructure.Persistence.Interceptors;
 /// line of defense, not a substitute for application-side validation):
 /// <list type="number">
 ///   <item><see cref="ConnectionOpened"/> / <see cref="ConnectionOpenedAsync"/>: on every new
-///   Npgsql connection, set the session-scoped GUCs <c>app.account_id</c> and
-///   <c>app.user_id</c> to the ambient <see cref="IAccountContext"/> values, so the RLS
-///   policy's <c>current_setting(...)</c> lookup resolves to the same workspace the
-///   application believes it is acting in. The third argument (<c>false</c>) to
+///   Npgsql connection, set the session-scoped GUCs <c>app.account_id</c>,
+///   <c>app.user_id</c>, and <c>app.is_admin</c> to the ambient <see cref="IAccountContext"/>
+///   values, so the RLS policy's <c>current_setting(...)</c> lookup resolves to the same
+///   workspace the application believes it is acting in. The third argument (<c>false</c>) to
 ///   <c>set_config</c> makes the setting transaction-scoped; since we set it on every
-///   connection open and again before every <c>SaveChanges</c>, the value is always
-///   current regardless of pooling/transaction boundaries.</item>
+///   connection open and again before every <c>SaveChanges</c>, the value is always current
+///   regardless of pooling/transaction boundaries. <c>app.is_admin</c> is the single signal
+///   the Phase 5 RLS policy checks to grant the Administrator bypass — keeping the GUC
+///   naming on the interceptor side means there is exactly one place in the codebase that
+///   decides what Postgres gets told about the current principal.</item>
 ///   <item><see cref="SavingChangesAsync"/> / <see cref="SavingChanges"/>: walk
 ///   <see cref="DbContext.ChangeTracker"/>'s <see cref="IAccountScoped"/> entries and throw
 ///   <see cref="InvalidOperationException"/> on any <see cref="EntityState.Added"/> or
@@ -175,12 +178,14 @@ public sealed class RowLevelSecurityInterceptor : SaveChangesInterceptor, IDbCon
         using var command = npgsqlConnection.CreateCommand();
         command.CommandText =
             "SELECT set_config('app.account_id', @accountId, false), "
-            + "set_config('app.user_id', @userId, false);";
+            + "set_config('app.user_id', @userId, false), "
+            + "set_config('app.is_admin', @isAdmin, false);";
 
         // NpgsqlConnection.CreateCommand() returns NpgsqlCommand; AddWithValue is the
         // ergonomic wrapper that infers the parameter type from the value.
         command.Parameters.AddWithValue("@accountId", _accountContext.AccountId?.ToString() ?? string.Empty);
         command.Parameters.AddWithValue("@userId", _accountContext.UserId?.ToString() ?? string.Empty);
+        command.Parameters.AddWithValue("@isAdmin", _accountContext.IsAdministrator ? "true" : "false");
 
         command.ExecuteNonQuery();
     }
@@ -198,10 +203,12 @@ public sealed class RowLevelSecurityInterceptor : SaveChangesInterceptor, IDbCon
         await using var command = npgsqlConnection.CreateCommand();
         command.CommandText =
             "SELECT set_config('app.account_id', @accountId, false), "
-            + "set_config('app.user_id', @userId, false);";
+            + "set_config('app.user_id', @userId, false), "
+            + "set_config('app.is_admin', @isAdmin, false);";
 
         command.Parameters.AddWithValue("@accountId", _accountContext.AccountId?.ToString() ?? string.Empty);
         command.Parameters.AddWithValue("@userId", _accountContext.UserId?.ToString() ?? string.Empty);
+        command.Parameters.AddWithValue("@isAdmin", _accountContext.IsAdministrator ? "true" : "false");
 
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
