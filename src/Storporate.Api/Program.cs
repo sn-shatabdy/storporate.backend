@@ -7,16 +7,20 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
+using Storporate.Api.Authorization;
 using Storporate.Api.Configuration;
 using Storporate.Api.Errors;
+using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Email;
 using Storporate.Infrastructure.Llm;
 using Storporate.Infrastructure.Persistence;
+using Storporate.Infrastructure.Persistence.Interceptors;
 using Storporate.Infrastructure.Security;
 using Storporate.Infrastructure.Security.RateLimiting;
 using Storporate.Infrastructure.Storage;
 using Storporate.Modules.Identity;
 using Storporate.Modules.PlatformFoundations;
+using Storporate.Modules.SecurityGovernance;
 using Storporate.Modules.PlatformFoundations.Diagnostics;
 using Storporate.SharedKernel.Abstractions;
 using Storporate.SharedKernel.Security;
@@ -99,6 +103,15 @@ builder.Services
     .ValidateOnStart();
 
 // --- Persistence ---
+// STOR-62 Phase 4: register the RowLevelSecurityInterceptor in DI so EF Core's
+// AddDbContext<WriteDbContext> factory (below) can resolve it from the request scope
+// alongside the DbContext itself. The interceptor depends on the singleton IAccountContext
+// (registered in AddAuthorizationPolicies) — that lifetime pairing is safe because
+// AddAuthorizationPolicies registers AmbientAccountContext as a singleton with AsyncLocal
+// storage, so a singleton holding a reference to a singleton is exactly what we want, not
+// a captive-dependency bug.
+builder.Services.AddScoped<RowLevelSecurityInterceptor>();
+
 builder.Services.AddDbContext<WriteDbContext>((serviceProvider, options) =>
 {
     var connectionStrings = serviceProvider.GetRequiredService<IOptions<ConnectionStringsOptions>>().Value;
@@ -111,11 +124,18 @@ builder.Services.AddDbContext<WriteDbContext>((serviceProvider, options) =>
         SslMode = Enum.Parse<SslMode>(connectionStrings.SslMode, ignoreCase: true)
     };
     options.UseNpgsql(connectionStringBuilder.ConnectionString);
+
+    // AddInterceptors<T>() resolves the interceptor from the DbContext's service provider
+    // on every DbContext construction, which matches the interceptor's scoped registration
+    // above. The same WriteDbContext instance carries the same interceptor instance, so
+    // SavingChanges / ConnectionOpened callbacks stay coherent across a single request.
+    options.AddInterceptors(serviceProvider.GetRequiredService<RowLevelSecurityInterceptor>());
 });
 
 // --- Modules ---
 builder.Services.AddPlatformFoundationsHandlers();
 builder.Services.AddIdentityHandlers();
+builder.Services.AddSecurityGovernanceHandlers();
 
 // --- AI provider (Bionic-hosted local LLM, OpenAI-compatible) ---
 builder.Services.AddBionicLlmProvider();
@@ -172,6 +192,7 @@ builder.Services
     });
 
 builder.Services.AddAuthorization();
+builder.Services.AddAuthorizationPolicies();
 
 // --- OTP rate limiting: chained per-email fixed-window + per-IP token-bucket (STOR-61 Phase 2).
 // Read directly off configuration (rather than via the DI-resolved, validated IOptions<T>) purely
@@ -243,6 +264,14 @@ app.UseRateLimiter();
 // AFTER UseRateLimiter (so brute-force /me probing is rate-limited the same as /otp/*), and
 // BEFORE endpoint mapping. ---
 app.UseAuthentication();
+
+// --- STOR-62 Phase 3: ambient account context. Sits between UseAuthentication() (so the JWT
+// sub/actor_type claims are already on HttpContext.User) and UseAuthorization() (so every
+// RequirePermission gate resolves against the populated IAccountContext). The route-value
+// lookup for {accountId} also needs routing to have run, which UseAuthentication above
+// implicitly triggers in modern WebApplication pipelines. ---
+app.UseAccountContext();
+
 app.UseAuthorization();
 
 app.MapIdentityEndpoints();

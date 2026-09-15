@@ -3,8 +3,11 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
+using Storporate.Infrastructure.Persistence.Interceptors;
 
 namespace Storporate.Tests.Unit.Auth;
 
@@ -49,8 +52,13 @@ public sealed class AuthEndpointsFactory : WebApplicationFactory<Program>
         builder.ConfigureServices(services =>
         {
             // Replace the Postgres-backed WriteDbContext with an in-memory EF provider so the
-            // integration tests don't need a live Postgres. Done by removing all
-            // DbContextOptions<WriteDbContext> registrations and adding a fresh in-memory one.
+            // integration tests don't need a live Postgres. Done by removing every EF Core
+            // DbContextOptions descriptor (both the open-generic and the closed
+            // DbContextOptions<WriteDbContext> shape) and the WriteDbContext itself before
+            // re-registering with the in-memory provider. The FullName-substring filter
+            // catches the IDbContextOptionsConfiguration<T> internal registrations too,
+            // which is what makes the swap coherent — without removing those, the Npgsql-
+            // bound configuration leaks past the new AddDbContext call.
             var descriptors = services
                 .Where(d => d.ServiceType.FullName?.Contains("DbContextOptions") == true
                     || d.ServiceType == typeof(WriteDbContext))
@@ -59,7 +67,21 @@ public sealed class AuthEndpointsFactory : WebApplicationFactory<Program>
             {
                 services.Remove(descriptor);
             }
-            services.AddDbContext<WriteDbContext>(options => options.UseInMemoryDatabase("AuthEndpointsFactory"));
+
+            // STOR-62 Phase 4: WriteDbContext now requires IAccountContext. The factory
+            // overload that resolves from the request scope wires the test-only
+            // AmbientAccountContext (registered below) into every WriteDbContext the host
+            // builds. The interceptor itself is intentionally NOT registered here — the
+            // integration tests below exercise the JWT/permission/MVC pipeline, not the
+            // tenancy guard, and skipping the interceptor means the test can save data
+            // without going through UseAccountContext. Global query filter still applies
+            // (it's installed at OnModelCreating time), so any IAccountScoped query these
+            // tests might add would still be filtered — which is the right shape for an
+            // integration test of unrelated code paths.
+            services.AddDbContext<WriteDbContext>((sp, options) =>
+                options.UseInMemoryDatabase("AuthEndpointsFactory")
+                    .AddInterceptors(sp.GetRequiredService<RowLevelSecurityInterceptor>()));
+            services.AddScoped<RowLevelSecurityInterceptor>();
         });
 
         builder.UseEnvironment(Environments.Development);

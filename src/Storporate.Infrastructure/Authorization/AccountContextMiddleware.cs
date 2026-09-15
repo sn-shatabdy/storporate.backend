@@ -1,0 +1,81 @@
+using System.IdentityModel.Tokens.Jwt;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
+using Storporate.SharedKernel.Entities;
+
+namespace Storporate.Infrastructure.Authorization;
+
+/// <summary>
+/// Populates the ambient <see cref="IAccountContext"/> (UserId, AccountId, IsAdministrator)
+/// for the current request. Runs after <c>UseAuthentication()</c> so the JWT bearer middleware
+/// has already validated the access token and built <see cref="HttpContext.User"/>; runs
+/// before <c>UseAuthorization()</c> so every downstream <c>[Authorize]</c> / <c>RequirePermission</c>
+/// gate sees the resolved account context.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <see cref="UserId"/> is read from the JWT <c>sub</c> claim (RFC 7519 §4.1.2). The host's
+/// <c>AddJwtBearer</c> configuration sets <c>MapInboundClaims = false</c> exactly so this
+/// lookup sees the raw claim type — see <c>Program.cs</c>'s doc comment on that flag for
+/// why re-mapping would silently break the lookup.
+/// </para>
+/// <para>
+/// <see cref="IAccountContext.IsAdministrator"/> is read from the JWT <c>actor_type</c>
+/// claim (issued by <c>JwtTokenService.CreateAccessToken</c>) rather than a
+/// <see cref="Infrastructure.Persistence.WriteDbContext"/> lookup of <see cref="User.ActorType"/>.
+/// The <c>actor_type</c> claim is part of the same signed token, so trusting it costs no
+/// extra DB round-trip and stays accurate even if the user's role is changed between token
+/// issuance and request — an Administrator demoted after issuing an access token simply
+/// loses the bypass on the next token refresh, which is the right behavior for a short-
+/// lived (<c>JwtOptions.AccessTokenMinutes</c>) access token. A DB lookup would either
+/// have to be cached per-token (defeating the freshness goal) or repeated per request
+/// (wasting a round-trip on every authenticated call).
+/// </para>
+/// <para>
+/// <see cref="IAccountContext.AccountId"/> is read from the matched route's
+/// <c>{accountId}</c> route value, when one is present. Endpoints that don't bind
+/// <c>{accountId}</c> — every self-service endpoint that operates on the caller's own
+/// data — leave <see cref="IAccountContext.AccountId"/> as <see langword="null"/>, which the
+/// downstream layers treat as "implicitly the caller's own account" (the same-id check in
+/// the global query filter / RLS policy resolves this against <see cref="IAccountContext.UserId"/>
+/// when it runs).
+/// </para>
+/// </remarks>
+public static class AccountContextMiddleware
+{
+    private const string AccountIdRouteParameterName = "accountId";
+
+    private const string ActorTypeClaimType = "actor_type";
+
+    public static IApplicationBuilder UseAccountContext(this IApplicationBuilder app) =>
+        app.Use(async (context, next) =>
+        {
+            var writer = context.RequestServices
+                .GetRequiredService<IAccountContextWriter>();
+
+            // MapInboundClaims = false (set in Program.cs's AddJwtBearer block) means this
+            // lookup finds the raw "sub" claim rather than a remapped ClaimTypes.NameIdentifier.
+            var subClaim = context.User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+            if (Guid.TryParse(subClaim, out var userId))
+            {
+                writer.SetUserId(userId);
+            }
+
+            // Trusting the signed actor_type claim avoids a per-request DB round-trip and
+            // stays fresh as long as the access token itself stays fresh.
+            var actorTypeClaim = context.User.FindFirst(ActorTypeClaimType)?.Value;
+            writer.SetIsAdministrator(string.Equals(actorTypeClaim, ActorTypes.Administrator, StringComparison.Ordinal));
+
+            // Endpoint metadata is only fully populated after routing runs (UseRouting), so
+            // this middleware must run after that too — see Program.cs's pipeline ordering.
+            if (context.GetRouteValue(AccountIdRouteParameterName) is string accountIdText
+                && Guid.TryParse(accountIdText, out var accountId))
+            {
+                writer.SetAccountId(accountId);
+            }
+
+            await next(context);
+        });
+}

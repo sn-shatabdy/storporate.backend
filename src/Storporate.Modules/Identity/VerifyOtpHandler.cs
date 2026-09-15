@@ -17,13 +17,13 @@ namespace Storporate.Modules.Identity;
 /// </summary>
 public static class VerifyOtpHandler
 {
-    private static readonly string[] ValidActorTypes =
-    [
-        ActorTypes.Student,
-        ActorTypes.Organization,
-        ActorTypes.University,
-        ActorTypes.Club,
-    ];
+    /// <summary>
+    /// Actor types a brand-new user is allowed to register as via <c>/api/auth/otp/verify</c>.
+    /// Shared with <see cref="GoogleLoginHandler.ValidActorTypes"/> via
+    /// <see cref="IdentityAllowedActorTypes.Set"/> so a future auth path can't drift and let
+    /// <see cref="ActorTypes.Administrator"/> through.
+    /// </summary>
+    public static readonly IReadOnlySet<string> ValidActorTypes = IdentityAllowedActorTypes.Set;
 
     public static async Task<VerifyOtpResult> ExecuteAsync(
         string email,

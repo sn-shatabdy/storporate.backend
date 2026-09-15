@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Infrastructure.Security;
 using Storporate.SharedKernel.Entities;
@@ -12,9 +13,16 @@ public class JwtTokenServiceTests
     [Fact]
     public async Task IssueTokensAsync_PersistsHashedRefreshToken_AsNewSessionWithFreshFamilyId()
     {
-        await using var dbContext = new WriteDbContext(new DbContextOptionsBuilder<WriteDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .Options);
+        // WriteDbContext's constructor now requires an IAccountContext (STOR-62 Phase 4
+        // global query filter captures it at OnModelCreating time). These tests don't touch
+        // IAccountScoped entities (User / Session only), so a fresh empty AmbientAccountContext
+        // is enough — the captured reference just needs to exist, and its AsyncLocal values
+        // are never read because no IAccountScoped query runs here.
+        await using var dbContext = new WriteDbContext(
+            new DbContextOptionsBuilder<WriteDbContext>()
+                .UseInMemoryDatabase(Guid.NewGuid().ToString())
+                .Options,
+            new AmbientAccountContext());
 
         var options = Options.Create(new JwtOptions
         {
@@ -51,9 +59,12 @@ public class JwtTokenServiceTests
     [Fact]
     public async Task IssueTokensAsync_CalledTwice_ProducesDifferentFamilyIds()
     {
-        await using var dbContext = new WriteDbContext(new DbContextOptionsBuilder<WriteDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .Options);
+        // See the constructor-required-IAccountContext note on the other test above.
+        await using var dbContext = new WriteDbContext(
+            new DbContextOptionsBuilder<WriteDbContext>()
+                .UseInMemoryDatabase(Guid.NewGuid().ToString())
+                .Options,
+            new AmbientAccountContext());
 
         var options = Options.Create(new JwtOptions
         {

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Infrastructure.Security;
 using Storporate.Modules.Identity;
@@ -46,9 +47,11 @@ public class RequestOtpHandlerTests
     }
 
     private static WriteDbContext CreateDbContext() =>
+        // STOR-62 Phase 4: see LogoutHandlerTests comment.
         new(new DbContextOptionsBuilder<WriteDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .Options);
+            .Options,
+            new AmbientAccountContext());
 
     private sealed class FakeEmailSender : IEmailSender
     {

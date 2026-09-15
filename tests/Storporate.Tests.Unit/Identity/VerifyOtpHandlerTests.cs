@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.Identity;
 using Storporate.Modules.Identity.Exceptions;
@@ -170,10 +171,25 @@ public class VerifyOtpHandlerTests
             VerifyOtpHandler.ExecuteAsync(Email, Code, ActorTypes.Student, null, dbContext, tokenService, CancellationToken.None));
     }
 
+    [Fact]
+    public void ValidActorTypes_DoesNotIncludeAdministrator()
+    {
+        // Anti-privilege-escalation invariant: a brand-new user must not be able to register
+        // as ActorTypes.Administrator via /api/auth/otp/verify. Administrators bypass
+        // workspace isolation by design (see the STOR-62 plan), so an attack path that
+        // minted an Administrator JWT would silently grant cross-account visibility. The
+        // allowlist is the only line of defense; this test pins it as a structural
+        // invariant so a future refactor that drops the filter is caught at build time
+        // rather than after a security incident.
+        Assert.DoesNotContain(ActorTypes.Administrator, VerifyOtpHandler.ValidActorTypes);
+    }
+
     private static WriteDbContext CreateDbContext() =>
+        // STOR-62 Phase 4: see LogoutHandlerTests comment.
         new(new DbContextOptionsBuilder<WriteDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .Options);
+            .Options,
+            new AmbientAccountContext());
 
     private static OtpCode SeedOtpCode(
         WriteDbContext dbContext,
