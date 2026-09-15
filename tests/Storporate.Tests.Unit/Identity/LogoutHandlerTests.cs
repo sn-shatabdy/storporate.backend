@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.Identity;
 using Storporate.SharedKernel.Entities;
@@ -109,7 +110,12 @@ public class LogoutHandlerTests
             authenticationType: "test"));
 
     private static WriteDbContext CreateDbContext() =>
+        // STOR-62 Phase 4: WriteDbContext now requires IAccountContext for the global
+        // query filter. Logout flow touches Users/Sessions (not IAccountScoped), so an
+        // empty AmbientAccountContext satisfies the constructor without affecting query
+        // results.
         new(new DbContextOptionsBuilder<WriteDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .Options);
+            .Options,
+            new AmbientAccountContext());
 }

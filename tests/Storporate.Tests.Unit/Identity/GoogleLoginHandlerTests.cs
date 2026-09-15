@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.Identity;
 using Storporate.Modules.Identity.Exceptions;
@@ -214,7 +215,9 @@ public class GoogleLoginHandlerTests
     }
 
     private static WriteDbContext CreateDbContext() =>
+        // STOR-62 Phase 4: see LogoutHandlerTests comment.
         new(new DbContextOptionsBuilder<WriteDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .Options);
+            .Options,
+            new AmbientAccountContext());
 }

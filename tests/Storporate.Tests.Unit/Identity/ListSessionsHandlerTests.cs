@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.Identity;
 using Storporate.SharedKernel.Entities;
@@ -117,7 +118,11 @@ public class ListSessionsHandlerTests
             authenticationType: "test"));
 
     private static WriteDbContext CreateDbContext() =>
+        // STOR-62 Phase 4: WriteDbContext now requires IAccountContext for the global
+        // query filter. ListSessions flow only reads Sessions (not IAccountScoped), so a
+        // fresh AmbientAccountContext is enough.
         new(new DbContextOptionsBuilder<WriteDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .Options);
+            .Options,
+            new AmbientAccountContext());
 }

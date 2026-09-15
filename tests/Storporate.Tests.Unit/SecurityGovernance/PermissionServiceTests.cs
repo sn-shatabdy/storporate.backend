@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.SecurityGovernance;
 using Storporate.SharedKernel.Authorization;
@@ -138,7 +139,12 @@ public class PermissionServiceTests
     }
 
     private static WriteDbContext CreateDbContext() =>
+        // WriteDbContext's constructor now takes IAccountContext (STOR-62 Phase 4).
+        // PermissionServiceTests only touch User rows, which aren't IAccountScoped, so a
+        // fresh empty AmbientAccountContext is enough — its AsyncLocal values are never
+        // read here.
         new(new DbContextOptionsBuilder<WriteDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .Options);
+            .Options,
+            new AmbientAccountContext());
 }

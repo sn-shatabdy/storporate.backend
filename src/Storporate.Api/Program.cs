@@ -14,6 +14,7 @@ using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Email;
 using Storporate.Infrastructure.Llm;
 using Storporate.Infrastructure.Persistence;
+using Storporate.Infrastructure.Persistence.Interceptors;
 using Storporate.Infrastructure.Security;
 using Storporate.Infrastructure.Security.RateLimiting;
 using Storporate.Infrastructure.Storage;
@@ -102,6 +103,15 @@ builder.Services
     .ValidateOnStart();
 
 // --- Persistence ---
+// STOR-62 Phase 4: register the RowLevelSecurityInterceptor in DI so EF Core's
+// AddDbContext<WriteDbContext> factory (below) can resolve it from the request scope
+// alongside the DbContext itself. The interceptor depends on the singleton IAccountContext
+// (registered in AddAuthorizationPolicies) — that lifetime pairing is safe because
+// AddAuthorizationPolicies registers AmbientAccountContext as a singleton with AsyncLocal
+// storage, so a singleton holding a reference to a singleton is exactly what we want, not
+// a captive-dependency bug.
+builder.Services.AddScoped<RowLevelSecurityInterceptor>();
+
 builder.Services.AddDbContext<WriteDbContext>((serviceProvider, options) =>
 {
     var connectionStrings = serviceProvider.GetRequiredService<IOptions<ConnectionStringsOptions>>().Value;
@@ -114,6 +124,12 @@ builder.Services.AddDbContext<WriteDbContext>((serviceProvider, options) =>
         SslMode = Enum.Parse<SslMode>(connectionStrings.SslMode, ignoreCase: true)
     };
     options.UseNpgsql(connectionStringBuilder.ConnectionString);
+
+    // AddInterceptors<T>() resolves the interceptor from the DbContext's service provider
+    // on every DbContext construction, which matches the interceptor's scoped registration
+    // above. The same WriteDbContext instance carries the same interceptor instance, so
+    // SavingChanges / ConnectionOpened callbacks stay coherent across a single request.
+    options.AddInterceptors(serviceProvider.GetRequiredService<RowLevelSecurityInterceptor>());
 });
 
 // --- Modules ---

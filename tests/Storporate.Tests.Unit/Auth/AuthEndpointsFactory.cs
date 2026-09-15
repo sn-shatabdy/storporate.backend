@@ -3,8 +3,11 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
+using Storporate.Infrastructure.Persistence.Interceptors;
 
 namespace Storporate.Tests.Unit.Auth;
 
@@ -59,7 +62,21 @@ public sealed class AuthEndpointsFactory : WebApplicationFactory<Program>
             {
                 services.Remove(descriptor);
             }
-            services.AddDbContext<WriteDbContext>(options => options.UseInMemoryDatabase("AuthEndpointsFactory"));
+
+            // STOR-62 Phase 4: WriteDbContext now requires IAccountContext. The factory
+            // overload that resolves from the request scope wires the test-only
+            // AmbientAccountContext (registered below) into every WriteDbContext the host
+            // builds. The interceptor itself is intentionally NOT registered here — the
+            // integration tests below exercise the JWT/permission/MVC pipeline, not the
+            // tenancy guard, and skipping the interceptor means the test can save data
+            // without going through UseAccountContext. Global query filter still applies
+            // (it's installed at OnModelCreating time), so any IAccountScoped query these
+            // tests might add would still be filtered — which is the right shape for an
+            // integration test of unrelated code paths.
+            services.AddDbContext<WriteDbContext>((sp, options) =>
+                options.UseInMemoryDatabase("AuthEndpointsFactory")
+                    .AddInterceptors(sp.GetRequiredService<RowLevelSecurityInterceptor>()));
+            services.AddScoped<RowLevelSecurityInterceptor>();
         });
 
         builder.UseEnvironment(Environments.Development);
