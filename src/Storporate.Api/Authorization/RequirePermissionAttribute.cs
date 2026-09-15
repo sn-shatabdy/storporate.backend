@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
+using Storporate.SharedKernel.Authorization;
 
 namespace Storporate.Api.Authorization;
 
@@ -62,6 +63,24 @@ public sealed class RequirePermissionAttribute : Attribute, IAuthorizeData
     public RequirePermissionAttribute(string permission)
     {
         ArgumentException.ThrowIfNullOrEmpty(permission);
+
+        // Fail-fast against the permission catalog: a typo like "jbos:read" would otherwise
+        // compile, attach to the endpoint, and silently fail closed (handler returns false) for
+        // every caller at runtime — a security- and productivity-relevant silent contract
+        // change. Because every RequirePermission(...) call runs at endpoint-mapping time
+        // (effectively at app startup), throwing here surfaces the typo with the exact
+        // offending literal before any request is served. The check uses Permissions.All
+        // (built once at class-init from reflection over every nested const string), so a
+        // permission added to a nested Permissions.* class is automatically recognized.
+        if (!Permissions.All.Contains(permission))
+        {
+            throw new ArgumentException(
+                $"'{permission}' is not a registered permission. Expected one of: "
+                + string.Join(", ", Permissions.All)
+                + ". Add the literal to a Permissions.<area> nested class first.",
+                nameof(permission));
+        }
+
         // Setting Policy in the ctor (and leaving it mutable for IAuthorizeData's interface
         // contract) means the value is on the attribute instance the moment it lands on the
         // endpoint's Metadata list — important for the Phase 6 coverage test, which reflects
