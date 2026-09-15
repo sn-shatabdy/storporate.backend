@@ -308,6 +308,10 @@ public class PermissionCoverageTests
                 // the host can fully start (the global query filter + interceptor wiring
                 // runs at startup, not just at first request). The interceptor's Npgsql
                 // GUC writer is a no-op under InMemory, so no connection is ever opened.
+                // The FullName-substring filter catches the IDbContextOptionsConfiguration<T>
+                // internal registrations too — without removing those, the Npgsql-bound
+                // configuration leaks past the new AddDbContext call. See
+                // AuthEndpointsFactory for the same pattern.
                 var descriptors = services
                     .Where(d => d.ServiceType.FullName?.Contains("DbContextOptions") == true
                         || d.ServiceType == typeof(WriteDbContext))

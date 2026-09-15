@@ -52,8 +52,13 @@ public sealed class AuthEndpointsFactory : WebApplicationFactory<Program>
         builder.ConfigureServices(services =>
         {
             // Replace the Postgres-backed WriteDbContext with an in-memory EF provider so the
-            // integration tests don't need a live Postgres. Done by removing all
-            // DbContextOptions<WriteDbContext> registrations and adding a fresh in-memory one.
+            // integration tests don't need a live Postgres. Done by removing every EF Core
+            // DbContextOptions descriptor (both the open-generic and the closed
+            // DbContextOptions<WriteDbContext> shape) and the WriteDbContext itself before
+            // re-registering with the in-memory provider. The FullName-substring filter
+            // catches the IDbContextOptionsConfiguration<T> internal registrations too,
+            // which is what makes the swap coherent — without removing those, the Npgsql-
+            // bound configuration leaks past the new AddDbContext call.
             var descriptors = services
                 .Where(d => d.ServiceType.FullName?.Contains("DbContextOptions") == true
                     || d.ServiceType == typeof(WriteDbContext))

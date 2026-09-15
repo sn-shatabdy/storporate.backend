@@ -36,14 +36,25 @@ public sealed class PermissionService(WriteDbContext dbContext) : IPermissionSer
         string permission,
         CancellationToken cancellationToken)
     {
-        var permissions = await GetPermissionsAsync(userId, accountId, cancellationToken);
-        return permissions.Contains(permission);
+        var grants = await ResolveGrantsAsync(userId, cancellationToken);
+        return grants.Contains(permission);
     }
 
     public async Task<IReadOnlySet<string>> GetPermissionsAsync(
         Guid userId,
         Guid accountId,
         CancellationToken cancellationToken)
+    {
+        return await ResolveGrantsAsync(userId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Single point of database access for the service: one <c>SELECT ActorType</c> per call,
+    /// shared between <see cref="HasPermissionAsync"/> and <see cref="GetPermissionsAsync"/>.
+    /// Factoring it out prevents the two public methods from drifting into different queries
+    /// over time and guarantees they always reflect the same DB snapshot.
+    /// </summary>
+    private async Task<IReadOnlySet<string>> ResolveGrantsAsync(Guid userId, CancellationToken cancellationToken)
     {
         // AsNoTracking: this is a pure authorization lookup, no entity-change tracking needed.
         // We only need ActorType to map to SystemRoles.Grants — no further mutations.
@@ -58,13 +69,14 @@ public sealed class PermissionService(WriteDbContext dbContext) : IPermissionSer
         // the DB column is non-nullable and required at insert.
         if (actorType is null || !SystemRoles.Grants.TryGetValue(actorType, out var granted))
         {
-            return new HashSet<string>(StringComparer.Ordinal);
+            return EmptyGrants;
         }
 
-        // Snapshot the IReadOnlySet<string> into a HashSet<string> (concrete IReadOnlySet<string>)
-        // so callers can rely on HashSet semantics without copying again. The contract is
-        // IReadOnlySet<string> — implementations of the interface need not be hash sets, but
-        // for Phase 2 with a static, ordinal-comparer dictionary this is the natural shape.
-        return new HashSet<string>(granted, StringComparer.Ordinal);
+        // SystemRoles.Grants already returns HashSet<string> with StringComparer.Ordinal, so
+        // we return it as-is — the IReadOnlySet<string> contract is satisfied without copying
+        // a static, never-mutated dictionary value just to look like a fresh HashSet.
+        return granted;
     }
+
+    private static readonly IReadOnlySet<string> EmptyGrants = new HashSet<string>(StringComparer.Ordinal);
 }

@@ -89,13 +89,16 @@ public static class SystemRoles
         };
         var administrator = new HashSet<string>(Permissions.All, StringComparer.Ordinal);
 
+        // Dictionary keys reference ActorTypes.* rather than the role-name string literals
+        // declared on this class so a typo in either side is caught by the compiler instead
+        // of silently producing a never-looked-up grant set.
         return new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
         {
-            [Student] = readOnly,
-            [Organization] = fullJobs,
-            [University] = readOnly,
-            [Club] = readOnly,
-            [Administrator] = administrator,
+            [ActorTypes.Student] = readOnly,
+            [ActorTypes.Organization] = fullJobs,
+            [ActorTypes.University] = readOnly,
+            [ActorTypes.Club] = readOnly,
+            [ActorTypes.Administrator] = administrator,
         };
     }
 }
