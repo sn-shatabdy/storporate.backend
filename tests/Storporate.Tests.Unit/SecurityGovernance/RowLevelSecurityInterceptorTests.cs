@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Npgsql;
 using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Infrastructure.Persistence.Interceptors;
@@ -262,6 +263,118 @@ public class RowLevelSecurityInterceptorTests
         dbContext.SaveChanges();
     }
 
+    [Fact]
+    public async Task ReadQuery_AmbientContextChangeBetweenTwoReads_ReflectsLatestAccount()
+    {
+        // Phase 5 RLS fix — "stale pooled connection" scenario the IDbCommandInterceptor
+        // hooks close: two Job rows under different AccountIds, ambient context flips
+        // from A to B with no SaveChanges in between, and the second read must resolve
+        // through the fresh account. In production this is exactly what happens when
+        // Npgsql hands the same pooled connection to a different request — the global
+        // query filter and the session-GUC RLS policy both have to be regenerated for
+        // the new request. Under InMemory the GUC SQL inside ApplyPostgresGucs
+        // short-circuits on the connection-type check, but the read path itself stays
+        // correct because the global query filter evaluates the ambient context fresh
+        // on every query — and the new IDbCommandInterceptor hooks exist to ensure the
+        // same is true on a real Npgsql connection where the InMemory provider's
+        // short-circuit doesn't apply.
+        var accountA = Guid.NewGuid();
+        var accountB = Guid.NewGuid();
+        var databaseName = Guid.NewGuid().ToString();
+        await SeedJobAsync(databaseName, accountA, "A's job");
+        await SeedJobAsync(databaseName, accountB, "B's job");
+
+        var mutableContext = new MutableTestAccountContext
+        {
+            UserId = accountA,
+            AccountId = accountA,
+        };
+
+        await using var dbContext = CreateDbContext(databaseName, mutableContext);
+
+        // First read — ambient context is A. The global query filter narrows to A's row.
+        var fromAccountA = await dbContext.Jobs.ToListAsync();
+
+        Assert.Single(fromAccountA);
+        Assert.Equal(accountA, fromAccountA[0].AccountId);
+
+        // Second read — ambient context flips to B with no SaveChanges in between. In
+        // production this is exactly the "stale pooled connection" scenario the new
+        // IDbCommandInterceptor hooks exist to defend against; here it proves the read
+        // path stays correct when the connection state would otherwise differ.
+        mutableContext.SetAccountId(accountB);
+        mutableContext.SetUserId(accountB);
+
+        var fromAccountB = await dbContext.Jobs.ToListAsync();
+
+        Assert.Single(fromAccountB);
+        Assert.Equal(accountB, fromAccountB[0].AccountId);
+    }
+
+    [Fact]
+    public void CommandInterceptorHooks_ReReadAmbientContextOnEveryInvocation()
+    {
+        // Phase 5 RLS fix — direct mechanism test. Drives the production interceptor's
+        // GUC SQL builder through the internal BuildGucSetCommandForTest seam (see
+        // Storporate.Infrastructure/Properties/AssemblyInfo.cs for the InternalsVisibleTo
+        // grant) to verify that the SQL the interceptor would emit reflects the *live*
+        // IAccountContext at the moment of the call — not a snapshot captured at
+        // interceptor construction. This is the property the IDbCommandInterceptor hooks
+        // protect for pooled Npgsql connections: even if a previous request set the GUCs
+        // to account A's values, a subsequent request that reads them through this
+        // builder sees account B's values because the builder re-reads _accountContext
+        // on every invocation.
+        //
+        // The GUC command is built (not executed) so we never touch a real Postgres
+        // connection. Building is enough — it forces the IAccountContext read path and
+        // the parameter values that would have gone out over the wire.
+        var accountA = Guid.NewGuid();
+        var accountB = Guid.NewGuid();
+        var mutableContext = new MutableTestAccountContext
+        {
+            UserId = accountA,
+            AccountId = accountA,
+            IsAdministrator = false,
+        };
+        var interceptor = new RowLevelSecurityInterceptor(mutableContext);
+        var connection = new NpgsqlConnection("Host=localhost;Database=unused;Username=unused;Password=unused");
+
+        // First build — ambient context is account A. Inspect the parameters that would
+        // have been sent over the wire.
+        using (var commandA = interceptor.BuildGucSetCommandForTest(connection))
+        {
+            var accountParamA = (string?)commandA.Parameters["@accountId"].Value;
+            var userParamA = (string?)commandA.Parameters["@userId"].Value;
+            var isAdminParamA = (string?)commandA.Parameters["@isAdmin"].Value;
+            Assert.Equal(accountA.ToString(), accountParamA);
+            Assert.Equal(accountA.ToString(), userParamA);
+            Assert.Equal("false", isAdminParamA);
+        }
+
+        // Mutate the ambient context — the production interceptor is the same instance
+        // (no re-construction); if it captured values at construction this build would
+        // still emit account A's parameters. The fact that it emits account B's proves
+        // the GUC SQL uses the *current* IAccountContext.
+        mutableContext.SetAccountId(accountB);
+        mutableContext.SetUserId(accountB);
+
+        using (var commandB = interceptor.BuildGucSetCommandForTest(connection))
+        {
+            var accountParamB = (string?)commandB.Parameters["@accountId"].Value;
+            var userParamB = (string?)commandB.Parameters["@userId"].Value;
+            var isAdminParamB = (string?)commandB.Parameters["@isAdmin"].Value;
+            Assert.Equal(accountB.ToString(), accountParamB);
+            Assert.Equal(accountB.ToString(), userParamB);
+            Assert.Equal("false", isAdminParamB);
+
+            // Defensive assertion: account A's values must NOT have leaked through into
+            // the second build. A regression that cached values at construction would
+            // fail this assertion with account A's guid.
+            Assert.NotEqual(accountA.ToString(), accountParamB);
+            Assert.NotEqual(accountA.ToString(), userParamB);
+        }
+    }
+
     private static async Task SeedJobAsync(string databaseName, Guid accountId, string payload)
     {
         // Seeds a Job into a WriteDbContext that has an ambient context set to match
@@ -305,6 +418,55 @@ public class RowLevelSecurityInterceptorTests
         public Guid? AccountId { get; init; }
 
         public bool IsAdministrator { get; init; }
+    }
+
+    /// <summary>
+    /// Mutable counterpart to <see cref="TestAccountContext"/> for tests that need to
+    /// simulate the ambient context changing between two EF Core operations on the same
+    /// DbContext (mirroring what would happen if a pooled connection handed back to the
+    /// pool was reused by a different request). The read/write pair lets the
+    /// direct-mechanism test assert that the production interceptor's GUC builder
+    /// re-reads the live ambient context on every invocation — the property that closes
+    /// the stale-GUC window for pooled Npgsql connections.
+    /// </summary>
+    private sealed class MutableTestAccountContext : IAccountContext
+    {
+        private Guid? _userId;
+        private Guid? _accountId;
+        private bool _isAdministrator;
+
+        public Guid? UserId
+        {
+            get => _userId;
+            init => _userId = value;
+        }
+
+        public Guid? AccountId
+        {
+            get => _accountId;
+            init => _accountId = value;
+        }
+
+        public bool IsAdministrator
+        {
+            get => _isAdministrator;
+            init => _isAdministrator = value;
+        }
+
+        public void SetUserId(Guid? value)
+        {
+            _userId = value;
+        }
+
+        public void SetAccountId(Guid? value)
+        {
+            _accountId = value;
+        }
+
+        public void SetIsAdministrator(bool value)
+        {
+            _isAdministrator = value;
+        }
     }
 
     private static WriteDbContext CreateDbContext(string databaseName, IAccountContext accountContext)

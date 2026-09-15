@@ -23,9 +23,9 @@ namespace Storporate.Infrastructure.Persistence.Interceptors;
 ///   values, so the RLS policy's <c>current_setting(...)</c> lookup resolves to the same
 ///   workspace the application believes it is acting in. The third argument (<c>false</c>) to
 ///   <c>set_config</c> makes the setting transaction-scoped; since we set it on every
-///   connection open and again before every <c>SaveChanges</c>, the value is always current
-///   regardless of pooling/transaction boundaries. <c>app.is_admin</c> is the single signal
-///   the Phase 5 RLS policy checks to grant the Administrator bypass — keeping the GUC
+///   connection open and again before every command EF Core issues, the value is always
+///   current regardless of pooling/transaction boundaries. <c>app.is_admin</c> is the single
+///   signal the Phase 5 RLS policy checks to grant the Administrator bypass — keeping the GUC
 ///   naming on the interceptor side means there is exactly one place in the codebase that
 ///   decides what Postgres gets told about the current principal.</item>
 ///   <item><see cref="SavingChangesAsync"/> / <see cref="SavingChanges"/>: walk
@@ -33,14 +33,34 @@ namespace Storporate.Infrastructure.Persistence.Interceptors;
 ///   <see cref="InvalidOperationException"/> on any <see cref="EntityState.Added"/> or
 ///   <see cref="EntityState.Modified"/> row whose <see cref="IAccountScoped.AccountId"/>
 ///   does not match the ambient account — unless the caller is an
-///   <see cref="ActorTypes.Administrator"/>, who is permitted to write cross-account.
-///   Also re-applies the GUCs in the same call so a connection that was opened earlier
-///   in the request still has fresh values at write time (connection pooling keeps the
-///   connection open across requests; an old <c>app.account_id</c> would otherwise
-///   leak).</item>
+///   <see cref="ActorTypes.Administrator"/>, who is permitted to write cross-account.</item>
 /// </list>
 /// </summary>
 /// <remarks>
+/// <para>
+/// <b>Why this also implements <see cref="IDbCommandInterceptor"/>:</b>
+/// <see cref="ConnectionOpened"/> alone is insufficient to keep Postgres'
+/// session-scoped GUCs fresh. Npgsql pools physical connections by default, and a pooled
+/// connection handed out for a plain read query (no <c>SaveChanges</c> in flight) still
+/// carries the GUCs set the last time somebody wrote something on it. If request N for
+/// account A sets <c>app.account_id = A</c>, the pool returns the same physical connection
+/// for request N+1 for account B (or an Administrator), and B's read sees A's GUCs — a
+/// stale-GUC window in the RLS backstop that no application-side enforcement catches. To
+/// close it, every command EF Core issues re-applies the GUCs immediately before the SQL
+/// goes on the wire, via <see cref="ReaderExecuting"/>, <see cref="ReaderExecutingAsync"/>,
+/// <see cref="ScalarExecuting"/>, <see cref="ScalarExecutingAsync"/>,
+/// <see cref="NonQueryExecuting"/>, and <see cref="NonQueryExecutingAsync"/>. EF Core
+/// dispatches every SQL command through one of those three execution paths, so these six
+/// hooks give full coverage.
+/// </para>
+/// <para>
+/// All six hooks share the same body as <see cref="ConnectionOpened"/> (refresh the GUCs)
+/// via the existing <see cref="ApplyPostgresGucs"/> / <see cref="ApplyPostgresGucsAsync"/>
+/// helpers — the SQL is built once in <see cref="BuildGucSetCommand"/> and is the same
+/// <c>SELECT set_config(...)</c> statement run on every hook. Cost-wise: one extra
+/// round-trip per command on Npgsql, amortized against pooled connections that were
+/// already going to be reused.
+/// </para>
 /// <para>
 /// Lifetime: <see cref="IAccountContext"/> is a singleton, so the interceptor must also be
 /// effectively singleton-safe. EF Core resolves <see cref="IInterceptor"/> registrations
@@ -58,7 +78,7 @@ namespace Storporate.Infrastructure.Persistence.Interceptors;
 /// silently skips them, so the same code is correct in both environments.
 /// </para>
 /// </remarks>
-public sealed class RowLevelSecurityInterceptor : SaveChangesInterceptor, IDbConnectionInterceptor
+public sealed class RowLevelSecurityInterceptor : SaveChangesInterceptor, IDbConnectionInterceptor, IDbCommandInterceptor
 {
     private readonly IAccountContext _accountContext;
 
@@ -83,6 +103,66 @@ public sealed class RowLevelSecurityInterceptor : SaveChangesInterceptor, IDbCon
     }
 
     /// <inheritdoc />
+    public InterceptionResult<DbDataReader> ReaderExecuting(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result)
+    {
+        ApplyPostgresGucs(command.Connection);
+        return result;
+    }
+
+    /// <inheritdoc />
+    public ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result,
+        CancellationToken cancellationToken = default)
+    {
+        return new ValueTask<InterceptionResult<DbDataReader>>(ReaderExecutingCoreAsync(command, result, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public InterceptionResult<object> ScalarExecuting(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<object> result)
+    {
+        ApplyPostgresGucs(command.Connection);
+        return result;
+    }
+
+    /// <inheritdoc />
+    public ValueTask<InterceptionResult<object>> ScalarExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<object> result,
+        CancellationToken cancellationToken = default)
+    {
+        return new ValueTask<InterceptionResult<object>>(ScalarExecutingCoreAsync(command, result, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public InterceptionResult<int> NonQueryExecuting(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<int> result)
+    {
+        ApplyPostgresGucs(command.Connection);
+        return result;
+    }
+
+    /// <inheritdoc />
+    public ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<int> result,
+        CancellationToken cancellationToken = default)
+    {
+        return new ValueTask<InterceptionResult<int>>(NonQueryExecutingCoreAsync(command, result, cancellationToken));
+    }
+
+    /// <inheritdoc />
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
     {
         EnforceAccountScope(eventData.Context);
@@ -97,6 +177,33 @@ public sealed class RowLevelSecurityInterceptor : SaveChangesInterceptor, IDbCon
     {
         EnforceAccountScope(eventData.Context);
         return ValueTask.FromResult(result);
+    }
+
+    private async Task<InterceptionResult<DbDataReader>> ReaderExecutingCoreAsync(
+        DbCommand command,
+        InterceptionResult<DbDataReader> result,
+        CancellationToken cancellationToken)
+    {
+        await ApplyPostgresGucsAsync(command.Connection, cancellationToken).ConfigureAwait(false);
+        return result;
+    }
+
+    private async Task<InterceptionResult<object>> ScalarExecutingCoreAsync(
+        DbCommand command,
+        InterceptionResult<object> result,
+        CancellationToken cancellationToken)
+    {
+        await ApplyPostgresGucsAsync(command.Connection, cancellationToken).ConfigureAwait(false);
+        return result;
+    }
+
+    private async Task<InterceptionResult<int>> NonQueryExecutingCoreAsync(
+        DbCommand command,
+        InterceptionResult<int> result,
+        CancellationToken cancellationToken)
+    {
+        await ApplyPostgresGucsAsync(command.Connection, cancellationToken).ConfigureAwait(false);
+        return result;
     }
 
     /// <summary>
@@ -164,7 +271,7 @@ public sealed class RowLevelSecurityInterceptor : SaveChangesInterceptor, IDbCon
         }
     }
 
-    private void ApplyPostgresGucs(DbConnection connection)
+    private void ApplyPostgresGucs(DbConnection? connection)
     {
         if (connection is not NpgsqlConnection npgsqlConnection)
         {
@@ -175,7 +282,7 @@ public sealed class RowLevelSecurityInterceptor : SaveChangesInterceptor, IDbCon
         command.ExecuteNonQuery();
     }
 
-    private async Task ApplyPostgresGucsAsync(DbConnection connection, CancellationToken cancellationToken)
+    private async Task ApplyPostgresGucsAsync(DbConnection? connection, CancellationToken cancellationToken)
     {
         if (connection is not NpgsqlConnection npgsqlConnection)
         {
@@ -197,5 +304,19 @@ public sealed class RowLevelSecurityInterceptor : SaveChangesInterceptor, IDbCon
         command.Parameters.AddWithValue("@userId", _accountContext.UserId?.ToString() ?? string.Empty);
         command.Parameters.AddWithValue("@isAdmin", _accountContext.IsAdministrator ? "true" : "false");
         return command;
+    }
+
+    /// <summary>
+    /// Test-only seam that builds and returns the same GUC-setting
+    /// <see cref="NpgsqlCommand"/> the production <see cref="ApplyPostgresGucs"/> would
+    /// execute, without actually running it. Lets the unit test suite verify the SQL the
+    /// interceptor would emit for a given ambient <see cref="IAccountContext"/> state
+    /// — the property the IDbCommandInterceptor hooks protect (re-reading the live
+    /// ambient context on every command, not a captured snapshot) — without standing up
+    /// a real Npgsql connection. Visible to the unit test assembly only.
+    /// </summary>
+    internal NpgsqlCommand BuildGucSetCommandForTest(NpgsqlConnection npgsqlConnection)
+    {
+        return BuildGucSetCommand(npgsqlConnection);
     }
 }

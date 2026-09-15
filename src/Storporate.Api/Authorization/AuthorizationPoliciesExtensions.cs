@@ -45,9 +45,11 @@ public static class AuthorizationPoliciesExtensions
 {
     public static IServiceCollection AddAuthorizationPolicies(this IServiceCollection services)
     {
-        // IHttpContextAccessor: standard minimal-API accessor. The handler itself doesn't use
-        // it today (its cancellation token is CancellationToken.None), but registering it here
-        // keeps Phase 4/5 from re-touching this file when they need RequestAborted.
+        // IHttpContextAccessor: standard minimal-API accessor. The handler uses it to
+        // forward the request's RequestAborted as the cancellation token for its
+        // IPermissionService lookup (see PermissionAuthorizationHandler.HandleRequirementAsync)
+        // so a client disconnect cancels the in-flight DB call. Registering it here keeps
+        // a single place that owns the accessor registration.
         services.AddHttpContextAccessor();
 
         // Ambient account context: singleton so its AsyncLocal storage spans the request's
