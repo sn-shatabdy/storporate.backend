@@ -6,6 +6,7 @@ using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.Identity;
 using Storporate.SharedKernel.Entities;
 using Storporate.SharedKernel.Security;
+using Storporate.Tests.Unit.Fakes;
 
 namespace Storporate.Tests.Unit.Identity;
 
@@ -16,13 +17,14 @@ namespace Storporate.Tests.Unit.Identity;
 public class LogoutAllHandlerTests
 {
     [Fact]
-    public async Task ExecuteAsync_RevokesEveryActiveSession_ForTheCaller()
+    public async Task ExecuteAsync_RevokesEveryActiveSession_ForTheCaller_AndAuditsRevocation()
     {
         await using var dbContext = CreateDbContext();
         var (user, sessions) = SeedUserWithThreeActiveSessions(dbContext);
+        var auditLogWriter = new FakeAuditLogWriter();
 
         var caller = BuildPrincipal(user.Id);
-        var revokedCount = await LogoutAllHandler.ExecuteAsync(caller, dbContext, CancellationToken.None);
+        var revokedCount = await LogoutAllHandler.ExecuteAsync(caller, dbContext, auditLogWriter, CancellationToken.None);
 
         Assert.Equal(3, revokedCount);
 
@@ -30,6 +32,16 @@ public class LogoutAllHandlerTests
             .Where(s => s.UserId == user.Id)
             .ToListAsync();
         Assert.All(reloaded, s => Assert.NotNull(s.RevokedAt));
+
+        // STOR-63 Phase 2: one "all_sessions_revoked" row whose metadata captures how many
+        // sessions actually got killed — the future admin UI surfaces this as "killed N
+        // sessions at <timestamp>" without a second query.
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("all_sessions_revoked", entry.Action);
+        Assert.Equal("Session", entry.ResourceType);
+        Assert.Null(entry.ResourceId);
+        Assert.NotNull(entry.MetadataJson);
+        Assert.Contains("\"revokedCount\":3", entry.MetadataJson, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -38,9 +50,10 @@ public class LogoutAllHandlerTests
         await using var dbContext = CreateDbContext();
         var (callerUser, _) = SeedUserWithThreeActiveSessions(dbContext, "caller@example.com");
         var (otherUser, otherSessions) = SeedUserWithThreeActiveSessions(dbContext, "other@example.com");
+        var auditLogWriter = new FakeAuditLogWriter();
 
         var caller = BuildPrincipal(callerUser.Id);
-        var revokedCount = await LogoutAllHandler.ExecuteAsync(caller, dbContext, CancellationToken.None);
+        var revokedCount = await LogoutAllHandler.ExecuteAsync(caller, dbContext, auditLogWriter, CancellationToken.None);
 
         // Only the caller's 3 sessions were active — other user's were also active, but they
         // belong to a different user id so they remain untouched.
@@ -53,19 +66,45 @@ public class LogoutAllHandlerTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_AlreadyRevokedSessions_AreNotCounted()
+    public async Task ExecuteAsync_AlreadyRevokedSessions_AreNotCounted_AndNoAuditRowRecorded()
     {
+        // STOR-63 Phase 2: "already-revoked" semantics match LogoutHandler's — only the
+        // sessions that actually got revoked by this call contribute to revokedCount, and
+        // the audit row records only the count of sessions this call killed (not the
+        // pre-existing-already-revoked ones). When zero sessions actually got revoked by
+        // this call, the handler returns 0 and records no audit row at all — same
+        // "real event happened" invariant as the single-session logout.
         await using var dbContext = CreateDbContext();
         var (user, sessions) = SeedUserWithThreeActiveSessions(dbContext);
 
         // Mark one session as already revoked.
         sessions[0].RevokedAt = DateTime.UtcNow.AddHours(-1);
         await dbContext.SaveChangesAsync();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         var caller = BuildPrincipal(user.Id);
-        var revokedCount = await LogoutAllHandler.ExecuteAsync(caller, dbContext, CancellationToken.None);
+        var revokedCount = await LogoutAllHandler.ExecuteAsync(caller, dbContext, auditLogWriter, CancellationToken.None);
 
         Assert.Equal(2, revokedCount);
+
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("all_sessions_revoked", entry.Action);
+        Assert.Contains("\"revokedCount\":2", entry.MetadataJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NoActiveSessions_RecordsNoAuditRow()
+    {
+        // STOR-63 Phase 2: a logout-all call that finds nothing to revoke records nothing.
+        await using var dbContext = CreateDbContext();
+        var userId = Guid.NewGuid();
+        var caller = BuildPrincipal(userId);
+        var auditLogWriter = new FakeAuditLogWriter();
+
+        var revokedCount = await LogoutAllHandler.ExecuteAsync(caller, dbContext, auditLogWriter, CancellationToken.None);
+
+        Assert.Equal(0, revokedCount);
+        Assert.Empty(auditLogWriter.Recorded);
     }
 
     private static (User user, List<Session> sessions) SeedUserWithThreeActiveSessions(

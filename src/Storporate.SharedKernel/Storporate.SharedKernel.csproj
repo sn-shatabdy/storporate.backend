@@ -1,3 +1,25 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <!-- STOR-63 Phase 3: RequirePermissionAttribute / RequirePermissionExtensions live
+         here now (relocated from Storporate.Api so module-level endpoints can call
+         .RequirePermission(...) without a backward Modules->Api reference). They
+         need Microsoft.AspNetCore.App's Authorization + Routing + Builder types, which
+         ship with the shared framework rather than as NuGet packages. The Infrastructure
+         project already references this same framework; declaring it here keeps the
+         SharedKernel independently usable from any future module that only references
+         SharedKernel + the framework. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- STOR-63 Phase 3: PaginationExtensions.ToPagedResultAsync operates on
+         IQueryable<T> and calls CountAsync / ToListAsync, which live in
+         Microsoft.EntityFrameworkCore. The package is otherwise needed transitively in
+         Storporate.Infrastructure and Storporate.Modules already; declaring it here keeps
+         the pagination primitives independently usable from any future module that only
+         references the SharedKernel. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.10" />
+  </ItemGroup>
 
 </Project>

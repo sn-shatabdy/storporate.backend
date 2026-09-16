@@ -3,6 +3,7 @@ using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.Identity;
 using Storporate.Modules.Identity.Exceptions;
+using Storporate.SharedKernel.Auditing;
 using Storporate.SharedKernel.Entities;
 using Storporate.Tests.Unit.Fakes;
 
@@ -17,7 +18,7 @@ namespace Storporate.Tests.Unit.Identity;
 public class GoogleLoginHandlerTests
 {
     [Fact]
-    public async Task ExecuteAsync_NewSubjectId_CreatesUser_WithProvidedActorType_AndIssuesTokens()
+    public async Task ExecuteAsync_NewSubjectId_CreatesUser_WithProvidedActorType_AndIssuesTokens_AndAuditsSuccess()
     {
         await using var dbContext = CreateDbContext();
         var googleValidator = new FakeGoogleIdTokenValidator
@@ -26,6 +27,7 @@ public class GoogleLoginHandlerTests
             Email = "newuser@example.com",
         };
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         var result = await GoogleLoginHandler.ExecuteAsync(
             idToken: "test-id-token",
@@ -34,6 +36,7 @@ public class GoogleLoginHandlerTests
             dbContext,
             googleValidator,
             tokenService,
+            auditLogWriter,
             CancellationToken.None);
 
         Assert.True(result.IsNewUser);
@@ -43,6 +46,14 @@ public class GoogleLoginHandlerTests
         Assert.Equal(VerificationStatuses.Verified, result.User.VerificationStatus);
         Assert.NotNull(await dbContext.Users.SingleOrDefaultAsync(u => u.Email == "newuser@example.com"));
         Assert.Equal(1, tokenService.IssueCount);
+
+        // STOR-63 Phase 2: success path audits against the resulting User.Id — same shape
+        // as VerifyOtpHandler's "login_succeeded" so a future audit-log query doesn't have
+        // to branch on which auth path produced the row.
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("google_login_succeeded", entry.Action);
+        Assert.Equal("User", entry.ResourceType);
+        Assert.Equal(result.User.Id.ToString(), entry.ResourceId);
     }
 
     [Fact]
@@ -55,6 +66,7 @@ public class GoogleLoginHandlerTests
             Email = "organization@example.com",
         };
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         var result = await GoogleLoginHandler.ExecuteAsync(
             idToken: "test-id-token",
@@ -63,13 +75,14 @@ public class GoogleLoginHandlerTests
             dbContext,
             googleValidator,
             tokenService,
+            auditLogWriter,
             CancellationToken.None);
 
         Assert.Equal(VerificationStatuses.Unverified, result.User.VerificationStatus);
     }
 
     [Fact]
-    public async Task ExecuteAsync_NewUser_WithoutActorType_ThrowsActorTypeRequired()
+    public async Task ExecuteAsync_NewUser_WithoutActorType_ThrowsActorTypeRequired_AndAuditsFailure()
     {
         await using var dbContext = CreateDbContext();
         var googleValidator = new FakeGoogleIdTokenValidator
@@ -78,12 +91,46 @@ public class GoogleLoginHandlerTests
             Email = "noactor@example.com",
         };
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         await Assert.ThrowsAsync<ActorTypeRequiredException>(() =>
             GoogleLoginHandler.ExecuteAsync(
-                "test-id-token", null, null, dbContext, googleValidator, tokenService, CancellationToken.None));
+                "test-id-token", null, null, dbContext, googleValidator, tokenService, auditLogWriter, CancellationToken.None));
 
         Assert.Empty(await dbContext.Users.ToListAsync());
+
+        // STOR-63 Phase 2: missing actor_type records the canonical "actor_type_missing"
+        // reason so the admin UI's "ActorType rejected" filter matches.
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("google_login_failed", entry.Action);
+        Assert.Equal("User", entry.ResourceType);
+        Assert.Null(entry.ResourceId);
+        Assert.Equal(AuditReasons.ActorTypeMissing, entry.MetadataJson);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NewUser_WithUnrecognizedActorType_AuditsActorTypeUnrecognizedReason()
+    {
+        // Regression guard: the unrecognized-actor-type branch (verifying the bug fix that
+        // distinguishes "missing" from "unrecognized") must write the canonical
+        // "actor_type_unrecognized" reason — NOT the older "actor_type_required" reason,
+        // which lied about which branch fired.
+        await using var dbContext = CreateDbContext();
+        var googleValidator = new FakeGoogleIdTokenValidator
+        {
+            SubjectId = "google-sub-bad-actor",
+            Email = "badactor@example.com",
+        };
+        var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
+
+        await Assert.ThrowsAsync<ActorTypeRequiredException>(() =>
+            GoogleLoginHandler.ExecuteAsync(
+                "test-id-token", "NotARealActorType", null, dbContext, googleValidator, tokenService, auditLogWriter, CancellationToken.None));
+
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("google_login_failed", entry.Action);
+        Assert.Equal(AuditReasons.ActorTypeUnrecognized, entry.MetadataJson);
     }
 
     [Fact]
@@ -108,9 +155,10 @@ public class GoogleLoginHandlerTests
             Email = "returning@example.com",
         };
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         var result = await GoogleLoginHandler.ExecuteAsync(
-            "test-id-token", actorType: null, null, dbContext, googleValidator, tokenService, CancellationToken.None);
+            "test-id-token", actorType: null, null, dbContext, googleValidator, tokenService, auditLogWriter, CancellationToken.None);
 
         Assert.False(result.IsNewUser);
         Assert.Equal(ActorTypes.Organization, result.User.ActorType);
@@ -143,9 +191,10 @@ public class GoogleLoginHandlerTests
             EmailVerified = true,
         };
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         var result = await GoogleLoginHandler.ExecuteAsync(
-            "test-id-token", null, null, dbContext, googleValidator, tokenService, CancellationToken.None);
+            "test-id-token", null, null, dbContext, googleValidator, tokenService, auditLogWriter, CancellationToken.None);
 
         Assert.False(result.IsNewUser);
         Assert.Equal("google-sub-linking", result.User.GoogleSubjectId);
@@ -184,10 +233,11 @@ public class GoogleLoginHandlerTests
             EmailVerified = false,
         };
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         await Assert.ThrowsAsync<GoogleEmailNotVerifiedException>(() =>
             GoogleLoginHandler.ExecuteAsync(
-                "test-id-token", null, null, dbContext, googleValidator, tokenService, CancellationToken.None));
+                "test-id-token", null, null, dbContext, googleValidator, tokenService, auditLogWriter, CancellationToken.None));
 
         // No mutation of the existing user record at all.
         var reloaded = await dbContext.Users.SingleAsync(u => u.Email == "victim@example.com");
@@ -197,10 +247,19 @@ public class GoogleLoginHandlerTests
         // No new user created, no tokens issued.
         Assert.Single(await dbContext.Users.ToListAsync());
         Assert.Equal(0, tokenService.IssueCount);
+
+        // STOR-63 Phase 2: the unverified-email rejection is a distinct audit action — it's
+        // the documented account-takeover-attempt signal, not a plain login failure. Phase
+        // 3's admin query distinguishes the two via the action string alone.
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("google_login_rejected_unverified_email", entry.Action);
+        Assert.Equal("User", entry.ResourceType);
+        Assert.Null(entry.ResourceId);
+        Assert.Null(entry.MetadataJson);
     }
 
     [Fact]
-    public async Task ExecuteAsync_GoogleValidatorThrows_WrapsAsGoogleLoginFailed()
+    public async Task ExecuteAsync_GoogleValidatorThrows_WrapsAsGoogleLoginFailed_AndAuditsFailure()
     {
         await using var dbContext = CreateDbContext();
         var googleValidator = new FakeGoogleIdTokenValidator
@@ -208,10 +267,21 @@ public class GoogleLoginHandlerTests
             ThrowForToken = "bad-token",
         };
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         await Assert.ThrowsAsync<GoogleLoginFailedException>(() =>
             GoogleLoginHandler.ExecuteAsync(
-                "bad-token", ActorTypes.Student, null, dbContext, googleValidator, tokenService, CancellationToken.None));
+                "bad-token", ActorTypes.Student, null, dbContext, googleValidator, tokenService, auditLogWriter, CancellationToken.None));
+
+        // STOR-63 Phase 2: bad-token / signature-mismatch failure from the validator
+        // records a plain "google_login_failed" (no reason metadata) — the validator's
+        // message isn't safe to surface as audit metadata (could echo PII from the failed
+        // token), so we deliberately skip it.
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("google_login_failed", entry.Action);
+        Assert.Equal("User", entry.ResourceType);
+        Assert.Null(entry.ResourceId);
+        Assert.Null(entry.MetadataJson);
     }
 
     [Fact]

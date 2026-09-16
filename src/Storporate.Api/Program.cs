@@ -6,7 +6,6 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
-using Npgsql;
 using Storporate.Api.Authorization;
 using Storporate.Api.Configuration;
 using Storporate.Api.Errors;
@@ -115,15 +114,7 @@ builder.Services.AddScoped<RowLevelSecurityInterceptor>();
 builder.Services.AddDbContext<WriteDbContext>((serviceProvider, options) =>
 {
     var connectionStrings = serviceProvider.GetRequiredService<IOptions<ConnectionStringsOptions>>().Value;
-
-    // Layer the configured SSL mode onto the connection string rather than baking it into
-    // ConnectionStrings__WriteDb directly, so local dev's plaintext Docker Postgres and a future
-    // hosted Postgres that requires TLS can share the same base connection string shape.
-    var connectionStringBuilder = new NpgsqlConnectionStringBuilder(connectionStrings.WriteDb)
-    {
-        SslMode = Enum.Parse<SslMode>(connectionStrings.SslMode, ignoreCase: true)
-    };
-    options.UseNpgsql(connectionStringBuilder.ConnectionString);
+    options.UseNpgsql(connectionStrings.ToNpgsqlConnectionString());
 
     // AddInterceptors<T>() resolves the interceptor from the DbContext's service provider
     // on every DbContext construction, which matches the interceptor's scoped registration
@@ -275,6 +266,7 @@ app.UseAccountContext();
 app.UseAuthorization();
 
 app.MapIdentityEndpoints();
+app.MapAuditLogEndpoints();
 
 // --- Temporary diagnostics endpoints (Phase 2: validation/exception-handler proof; Phase 3/4
 // add llm-ping/storage-ping alongside these) ---

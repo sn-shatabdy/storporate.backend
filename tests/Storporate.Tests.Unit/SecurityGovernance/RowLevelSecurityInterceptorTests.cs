@@ -418,6 +418,10 @@ public class RowLevelSecurityInterceptorTests
         public Guid? AccountId { get; init; }
 
         public bool IsAdministrator { get; init; }
+
+        public string? IpAddress { get; init; }
+
+        public string? UserAgent { get; init; }
     }
 
     /// <summary>
@@ -429,11 +433,13 @@ public class RowLevelSecurityInterceptorTests
     /// re-reads the live ambient context on every invocation — the property that closes
     /// the stale-GUC window for pooled Npgsql connections.
     /// </summary>
-    private sealed class MutableTestAccountContext : IAccountContext
+    private sealed class MutableTestAccountContext : IAccountContext, IAccountContextWriter
     {
         private Guid? _userId;
         private Guid? _accountId;
         private bool _isAdministrator;
+        private string? _ipAddress;
+        private string? _userAgent;
 
         public Guid? UserId
         {
@@ -453,6 +459,18 @@ public class RowLevelSecurityInterceptorTests
             init => _isAdministrator = value;
         }
 
+        public string? IpAddress
+        {
+            get => _ipAddress;
+            init => _ipAddress = value;
+        }
+
+        public string? UserAgent
+        {
+            get => _userAgent;
+            init => _userAgent = value;
+        }
+
         public void SetUserId(Guid? value)
         {
             _userId = value;
@@ -466,6 +484,16 @@ public class RowLevelSecurityInterceptorTests
         public void SetIsAdministrator(bool value)
         {
             _isAdministrator = value;
+        }
+
+        public void SetIpAddress(string? value)
+        {
+            _ipAddress = value;
+        }
+
+        public void SetUserAgent(string? value)
+        {
+            _userAgent = value;
         }
     }
 

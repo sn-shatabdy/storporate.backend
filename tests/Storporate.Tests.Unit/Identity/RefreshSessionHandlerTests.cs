@@ -19,14 +19,15 @@ public class RefreshSessionHandlerTests
     private const string UserEmail = "refresher@example.com";
 
     [Fact]
-    public async Task ExecuteAsync_ValidRefreshToken_RotatesSession_AndIssuesNewPair()
+    public async Task ExecuteAsync_ValidRefreshToken_RotatesSession_AndIssuesNewPair_AndAuditsSuccess()
     {
         await using var dbContext = CreateDbContext();
         var (user, session) = SeedActiveSession(dbContext);
         var tokenService = new RecordingJwtTokenService(dbContext);
+        var auditLogWriter = new FakeAuditLogWriter();
 
         var tokens = await RefreshSessionHandler.ExecuteAsync(
-            PlaintextRefreshToken, null, dbContext, tokenService, CancellationToken.None);
+            PlaintextRefreshToken, null, dbContext, tokenService, auditLogWriter, CancellationToken.None);
 
         Assert.NotEqual(PlaintextRefreshToken, tokens.RefreshToken);
         Assert.NotEmpty(tokens.AccessToken);
@@ -40,25 +41,34 @@ public class RefreshSessionHandlerTests
         var allSessions = await dbContext.Sessions.ToListAsync();
         Assert.Equal(2, allSessions.Count);
         Assert.All(allSessions, s => Assert.Equal(session.FamilyId, s.FamilyId));
+
+        // STOR-63 Phase 2: success path audits the rotation outcome with no resourceId
+        // (the rotated-out session's id isn't useful for query purposes — only the family
+        // is, and that's not yet stable across rotations).
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("token_refreshed", entry.Action);
+        Assert.Equal("Session", entry.ResourceType);
+        Assert.Null(entry.ResourceId);
     }
 
     [Fact]
-    public async Task ExecuteAsync_ResubmittingAlreadyRotatedRefreshToken_RevokesEntireFamily_AndRejectsSuccessor()
+    public async Task ExecuteAsync_ResubmittingAlreadyRotatedRefreshToken_RevokesEntireFamily_AndRejectsSuccessor_AndAuditsReuse()
     {
         await using var dbContext = CreateDbContext();
         var (user, originalSession) = SeedActiveSession(dbContext);
         var tokenService = new RecordingJwtTokenService(dbContext);
+        var auditLogWriter = new FakeAuditLogWriter();
 
         // First refresh — rotates out the original token and issues a new one (stored on the
         // tokenService as `tokenService.PlaintextRefreshTokens[1]`).
         await RefreshSessionHandler.ExecuteAsync(
-            PlaintextRefreshToken, null, dbContext, tokenService, CancellationToken.None);
+            PlaintextRefreshToken, null, dbContext, tokenService, auditLogWriter, CancellationToken.None);
 
         // Re-submit the same now-rotated-out token. The handler must detect this as reuse,
         // revoke the whole family, and throw RefreshTokenReusedException.
         await Assert.ThrowsAsync<RefreshTokenReusedException>(() =>
             RefreshSessionHandler.ExecuteAsync(
-                PlaintextRefreshToken, null, dbContext, tokenService, CancellationToken.None));
+                PlaintextRefreshToken, null, dbContext, tokenService, auditLogWriter, CancellationToken.None));
 
         // Every session in the family is revoked (both the original and its rotated-in successor).
         var familySessions = await dbContext.Sessions
@@ -73,11 +83,21 @@ public class RefreshSessionHandlerTests
         var successorRefreshToken = tokenService.PlaintextRefreshTokens[0];
         await Assert.ThrowsAsync<RefreshTokenInvalidException>(() =>
             RefreshSessionHandler.ExecuteAsync(
-                successorRefreshToken, null, dbContext, tokenService, CancellationToken.None));
+                successorRefreshToken, null, dbContext, tokenService, auditLogWriter, CancellationToken.None));
+
+        // STOR-63 Phase 2: the three refresh attempts produced exactly three audit rows —
+        // success, reuse, and the third (revoked) attempt as a plain failure. This is the
+        // exact forensic timeline an Integrity Layer (STOR-45) reviewer needs to reconstruct
+        // "attacker grabbed the rotated-out refresh token, family got revoked, then the
+        // attacker tried the rotated-in one too".
+        Assert.Equal(3, auditLogWriter.Recorded.Count);
+        Assert.Equal("token_refreshed", auditLogWriter.Recorded[0].Action);
+        Assert.Equal("refresh_token_reused", auditLogWriter.Recorded[1].Action);
+        Assert.Equal("token_refresh_failed", auditLogWriter.Recorded[2].Action);
     }
 
     [Fact]
-    public async Task ExecuteAsync_AlreadyRevokedSession_ThrowsRefreshTokenInvalid()
+    public async Task ExecuteAsync_AlreadyRevokedSession_ThrowsRefreshTokenInvalid_AndAuditsFailure()
     {
         await using var dbContext = CreateDbContext();
         var (user, session) = SeedActiveSession(dbContext);
@@ -86,14 +106,18 @@ public class RefreshSessionHandlerTests
         await dbContext.SaveChangesAsync();
 
         var tokenService = new RecordingJwtTokenService(dbContext);
+        var auditLogWriter = new FakeAuditLogWriter();
 
         await Assert.ThrowsAsync<RefreshTokenInvalidException>(() =>
             RefreshSessionHandler.ExecuteAsync(
-                PlaintextRefreshToken, null, dbContext, tokenService, CancellationToken.None));
+                PlaintextRefreshToken, null, dbContext, tokenService, auditLogWriter, CancellationToken.None));
+
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("token_refresh_failed", entry.Action);
     }
 
     [Fact]
-    public async Task ExecuteAsync_ExpiredSession_ThrowsRefreshTokenInvalid()
+    public async Task ExecuteAsync_ExpiredSession_ThrowsRefreshTokenInvalid_AndAuditsFailure()
     {
         await using var dbContext = CreateDbContext();
         var (user, session) = SeedActiveSession(dbContext);
@@ -101,25 +125,33 @@ public class RefreshSessionHandlerTests
         await dbContext.SaveChangesAsync();
 
         var tokenService = new RecordingJwtTokenService(dbContext);
+        var auditLogWriter = new FakeAuditLogWriter();
 
         await Assert.ThrowsAsync<RefreshTokenInvalidException>(() =>
             RefreshSessionHandler.ExecuteAsync(
-                PlaintextRefreshToken, null, dbContext, tokenService, CancellationToken.None));
+                PlaintextRefreshToken, null, dbContext, tokenService, auditLogWriter, CancellationToken.None));
+
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("token_refresh_failed", entry.Action);
     }
 
     [Fact]
-    public async Task ExecuteAsync_UnknownRefreshToken_ThrowsRefreshTokenInvalid()
+    public async Task ExecuteAsync_UnknownRefreshToken_ThrowsRefreshTokenInvalid_AndAuditsFailure()
     {
         await using var dbContext = CreateDbContext();
         var tokenService = new RecordingJwtTokenService(dbContext);
+        var auditLogWriter = new FakeAuditLogWriter();
 
         await Assert.ThrowsAsync<RefreshTokenInvalidException>(() =>
             RefreshSessionHandler.ExecuteAsync(
-                "never-issued-token", null, dbContext, tokenService, CancellationToken.None));
+                "never-issued-token", null, dbContext, tokenService, auditLogWriter, CancellationToken.None));
+
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("token_refresh_failed", entry.Action);
     }
 
     [Fact]
-    public async Task ExecuteAsync_RotationLosesRace_RevokesEntireFamily_AndThrowsRefreshTokenReused()
+    public async Task ExecuteAsync_RotationLosesRace_RevokesEntireFamily_AndThrowsRefreshTokenReused_AndAuditsReuse()
     {
         // Security regression (Cross-Validation, STOR-61): refresh-token rotation has a TOCTOU
         // race where two concurrent refresh calls presenting the exact same still-valid token
@@ -140,10 +172,11 @@ public class RefreshSessionHandlerTests
         await using var dbContext = CreateDbContext();
         var (user, originalSession) = SeedActiveSession(dbContext);
         var tokenService = new RaceLosingJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         await Assert.ThrowsAsync<RefreshTokenReusedException>(() =>
             RefreshSessionHandler.ExecuteAsync(
-                PlaintextRefreshToken, null, dbContext, tokenService, CancellationToken.None));
+                PlaintextRefreshToken, null, dbContext, tokenService, auditLogWriter, CancellationToken.None));
 
         // The raced-loser must be treated identically to a knowing token-reuse attacker:
         // the original session is revoked (so it cannot be replayed again) and no new
@@ -158,6 +191,44 @@ public class RefreshSessionHandlerTests
         Assert.Equal(originalSession.Id, familySessions[0].Id);
 
         Assert.Equal(1, tokenService.IssueRotatedCalls);
+
+        // STOR-63 Phase 2: the race-loser audit row uses "refresh_token_reused" (not
+        // "token_refresh_failed") — a raced loser IS a knowing token-reuse attacker from
+        // the audit log's point of view. This is the audit row that matters for "did we
+        // correctly catch this as a security event" forensic reviews.
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("refresh_token_reused", entry.Action);
+        Assert.Equal("Session", entry.ResourceType);
+        Assert.Null(entry.ResourceId);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RefreshTokenReused_IsDistinctFromRefreshTokenFailed()
+    {
+        // STOR-63 Phase 2 acceptance criterion: a dedicated test confirms the
+        // reuse/theft branch specifically records "refresh_token_reused", distinct from
+        // a plain "token_refresh_failed" test case. The other refresh-failure tests above
+        // each pin the "token_refresh_failed" side; this one pins the "refresh_token_reused"
+        // side and asserts they're never collapsed into one another.
+        await using var dbContext = CreateDbContext();
+        var (user, originalSession) = SeedActiveSession(dbContext);
+        var tokenService = new RecordingJwtTokenService(dbContext);
+        var auditLogWriter = new FakeAuditLogWriter();
+
+        // First call rotates the original session out — establishing that the next
+        // presentation of the same token is a reuse event, not a "never-issued" event.
+        await RefreshSessionHandler.ExecuteAsync(
+            PlaintextRefreshToken, null, dbContext, tokenService, auditLogWriter, CancellationToken.None);
+
+        // Second presentation of the same now-rotated-out token — the reuse branch.
+        await Assert.ThrowsAsync<RefreshTokenReusedException>(() =>
+            RefreshSessionHandler.ExecuteAsync(
+                PlaintextRefreshToken, null, dbContext, tokenService, auditLogWriter, CancellationToken.None));
+
+        // The reuse row must be present and distinct from any token_refresh_failed row.
+        var reuseEntry = Assert.Single(auditLogWriter.Recorded, e => e.Action == "refresh_token_reused");
+        Assert.Equal("Session", reuseEntry.ResourceType);
+        Assert.DoesNotContain(auditLogWriter.Recorded, e => e.Action == "token_refresh_failed");
     }
 
     [Fact]

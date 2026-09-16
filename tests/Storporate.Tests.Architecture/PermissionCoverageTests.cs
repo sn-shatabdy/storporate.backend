@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Storporate.Api.Authorization;
 using Storporate.Infrastructure.Persistence;
+using Storporate.SharedKernel.Authorization;
 
 namespace Storporate.Tests.Architecture;
 

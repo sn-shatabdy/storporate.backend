@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
+using Storporate.SharedKernel.Authorization;
 
 namespace Storporate.Api.Authorization;
 

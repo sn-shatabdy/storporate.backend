@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Diagnostics;
 using Storporate.Infrastructure.Llm;
 using Storporate.Infrastructure.Storage;
 using Storporate.Modules.Identity.Exceptions;
+using Storporate.Modules.SecurityGovernance;
 
 namespace Storporate.Api.Errors;
 
@@ -46,6 +47,8 @@ public sealed class GlobalExceptionHandler(
                 (StatusCodes.Status409Conflict, new ErrorResponse("google_email_not_verified", googleEmailNotVerifiedException.Message)),
             ActorTypeRequiredException actorTypeRequiredException =>
                 (StatusCodes.Status400BadRequest, new ErrorResponse("actor_type_required", actorTypeRequiredException.Message)),
+            UnknownSortKeyException unknownSortKeyException =>
+                (StatusCodes.Status400BadRequest, new ErrorResponse("unknown_sort_key", unknownSortKeyException.Message)),
             _ => (StatusCodes.Status500InternalServerError, MapUnhandledError(exception)),
         };
 

@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
+using Storporate.Infrastructure.Auditing;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.Identity.Exceptions;
 using Storporate.SharedKernel.Abstractions;
+using Storporate.SharedKernel.Auditing;
 using Storporate.SharedKernel.Entities;
 using Storporate.SharedKernel.Security;
 
@@ -14,6 +16,15 @@ namespace Storporate.Modules.Identity;
 /// Lookups prefer Google's stable <c>sub</c> claim, falling back to email only when no row has
 /// that <c>sub</c> set yet (covers accounts created purely via email-OTP that later link Google).
 /// </summary>
+/// <remarks>
+/// Mirrors <see cref="VerifyOtpHandler"/>'s "write before throw"
+/// discipline for failure branches (<c>google_login_failed</c>,
+/// <c>google_login_rejected_unverified_email</c>) and audits the success branch against the
+/// resulting <see cref="User.Id"/>. Google branch exceptions do not carry an email through the
+/// public path (the validator result lives in a local variable that isn't exposed) so
+/// <c>ResourceId</c> is <see langword="null"/> for the failure rows — the email is captured
+/// only on the success path where we have a confirmed user record.
+/// </remarks>
 public static class GoogleLoginHandler
 {
     /// <summary>
@@ -31,6 +42,7 @@ public static class GoogleLoginHandler
         WriteDbContext dbContext,
         IGoogleIdTokenValidator googleIdTokenValidator,
         IJwtTokenService tokenService,
+        IAuditLogWriter auditLogWriter,
         CancellationToken cancellationToken)
     {
         GoogleIdentityResult googleIdentity;
@@ -42,6 +54,13 @@ public static class GoogleLoginHandler
         {
             // Validator lives in Infrastructure and can't reference Modules exceptions —
             // wrap as the public-facing type here so GlobalExceptionHandler can map it.
+            // Audit the failed-login attempt before throwing so the row exists regardless
+            // of how the exception propagates upstream.
+            await auditLogWriter.WriteAsync(
+                action: "google_login_failed",
+                resourceType: "User",
+                resourceId: null,
+                cancellationToken: cancellationToken);
             throw new GoogleLoginFailedException(exception.Message);
         }
 
@@ -66,11 +85,23 @@ public static class GoogleLoginHandler
             {
                 if (string.IsNullOrWhiteSpace(actorType))
                 {
+                    await auditLogWriter.WriteAsync(
+                        action: "google_login_failed",
+                        resourceType: "User",
+                        resourceId: null,
+                        metadataJson: AuditReasons.ActorTypeMissing,
+                        cancellationToken: cancellationToken);
                     throw new ActorTypeRequiredException();
                 }
 
                 if (!ValidActorTypes.Contains(actorType))
                 {
+                    await auditLogWriter.WriteAsync(
+                        action: "google_login_failed",
+                        resourceType: "User",
+                        resourceId: null,
+                        metadataJson: AuditReasons.ActorTypeUnrecognized,
+                        cancellationToken: cancellationToken);
                     throw new ActorTypeRequiredException($"'{actorType}' is not a recognized actor type.");
                 }
 
@@ -100,6 +131,11 @@ public static class GoogleLoginHandler
                 // some other Google-linked service.
                 if (!googleIdentity.EmailVerified)
                 {
+                    await auditLogWriter.WriteAsync(
+                        action: "google_login_rejected_unverified_email",
+                        resourceType: "User",
+                        resourceId: null,
+                        cancellationToken: cancellationToken);
                     throw new GoogleEmailNotVerifiedException();
                 }
 
@@ -113,6 +149,12 @@ public static class GoogleLoginHandler
         await dbContext.SaveChangesAsync(cancellationToken);
 
         var tokens = await IssueSessionHandler.ExecuteAsync(user, userAgent, tokenService, cancellationToken);
+
+        await auditLogWriter.WriteAsync(
+            action: "google_login_succeeded",
+            resourceType: "User",
+            resourceId: user.Id.ToString(),
+            cancellationToken: cancellationToken);
 
         return new GoogleLoginResult(user, isNewUser, tokens);
     }

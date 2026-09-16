@@ -48,6 +48,11 @@ public sealed class WriteDbContext : DbContext
 
     public DbSet<Session> Sessions => Set<Session>();
 
+    // STOR-63 Phase 1: tamper-evident audit log. Rows are written via raw Npgsql by
+    // AuditLogWriter (not via this DbContext's change tracker), but reads through the
+    // Administrator query endpoint in Phase 3 use this DbSet for AsNoTracking LINQ queries.
+    public DbSet<AuditLogEntry> AuditLogEntries => Set<AuditLogEntry>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -58,6 +63,7 @@ public sealed class WriteDbContext : DbContext
         modelBuilder.ApplyConfiguration(new OtpCodeConfiguration());
         modelBuilder.ApplyConfiguration(new SessionConfiguration());
         modelBuilder.ApplyConfiguration(new JobConfiguration());
+        modelBuilder.ApplyConfiguration(new AuditLogEntryConfiguration());
 
         // Global query filter for every IAccountScoped entity type. We walk the model
         // once via reflection to discover which CLR types implement IAccountScoped,

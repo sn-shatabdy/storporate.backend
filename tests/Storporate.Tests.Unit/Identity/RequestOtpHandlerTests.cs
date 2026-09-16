@@ -6,6 +6,7 @@ using Storporate.Infrastructure.Security;
 using Storporate.Modules.Identity;
 using Storporate.SharedKernel.Abstractions;
 using Storporate.SharedKernel.Security;
+using Storporate.Tests.Unit.Fakes;
 
 namespace Storporate.Tests.Unit.Identity;
 
@@ -17,8 +18,9 @@ public class RequestOtpHandlerTests
         await using var dbContext = CreateDbContext();
         var emailSender = new FakeEmailSender();
         var otpOptions = Options.Create(new OtpOptions { CodeLength = 6, ExpiryMinutes = 10, MaxAttempts = 5 });
+        var auditLogWriter = new FakeAuditLogWriter();
 
-        await RequestOtpHandler.ExecuteAsync("Test@Example.com", dbContext, emailSender, otpOptions, CancellationToken.None);
+        await RequestOtpHandler.ExecuteAsync("Test@Example.com", dbContext, emailSender, otpOptions, auditLogWriter, CancellationToken.None);
 
         var storedCode = await dbContext.OtpCodes.SingleAsync();
 
@@ -39,11 +41,34 @@ public class RequestOtpHandlerTests
         await using var dbContext = CreateDbContext();
         var emailSender = new FakeEmailSender();
         var otpOptions = Options.Create(new OtpOptions { CodeLength = 8, ExpiryMinutes = 10, MaxAttempts = 5 });
+        var auditLogWriter = new FakeAuditLogWriter();
 
-        await RequestOtpHandler.ExecuteAsync("user@example.com", dbContext, emailSender, otpOptions, CancellationToken.None);
+        await RequestOtpHandler.ExecuteAsync("user@example.com", dbContext, emailSender, otpOptions, auditLogWriter, CancellationToken.None);
 
         Assert.Equal(8, emailSender.LastCode!.Length);
         Assert.True(long.TryParse(emailSender.LastCode, out _));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RecordsOtpRequestedAuditEntry()
+    {
+        // STOR-63 Phase 2: the success path's "otp_requested" audit row is what powers the
+        // "who is requesting codes" admin query in Phase 3. The audit row keys off the
+        // normalized email (matching how the OTP row itself is keyed) so a future
+        // audit-log filter by email resolves to the same canonical form the OTP
+        // verification uses.
+        await using var dbContext = CreateDbContext();
+        var emailSender = new FakeEmailSender();
+        var otpOptions = Options.Create(new OtpOptions { CodeLength = 6, ExpiryMinutes = 10, MaxAttempts = 5 });
+        var auditLogWriter = new FakeAuditLogWriter();
+
+        await RequestOtpHandler.ExecuteAsync("Mixed.Case@Example.com", dbContext, emailSender, otpOptions, auditLogWriter, CancellationToken.None);
+
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("otp_requested", entry.Action);
+        Assert.Equal("User", entry.ResourceType);
+        Assert.Equal("mixed.case@example.com", entry.ResourceId);
+        Assert.Null(entry.MetadataJson);
     }
 
     private static WriteDbContext CreateDbContext() =>

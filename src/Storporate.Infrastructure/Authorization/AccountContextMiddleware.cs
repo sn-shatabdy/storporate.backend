@@ -8,11 +8,11 @@ using Storporate.SharedKernel.Entities;
 namespace Storporate.Infrastructure.Authorization;
 
 /// <summary>
-/// Populates the ambient <see cref="IAccountContext"/> (UserId, AccountId, IsAdministrator)
-/// for the current request. Runs after <c>UseAuthentication()</c> so the JWT bearer middleware
-/// has already validated the access token and built <see cref="HttpContext.User"/>; runs
-/// before <c>UseAuthorization()</c> so every downstream <c>[Authorize]</c> / <c>RequirePermission</c>
-/// gate sees the resolved account context.
+/// Populates the ambient <see cref="IAccountContext"/> (UserId, AccountId, IsAdministrator,
+/// IpAddress, UserAgent) for the current request. Runs after <c>UseAuthentication()</c> so the
+/// JWT bearer middleware has already validated the access token and built
+/// <see cref="HttpContext.User"/>; runs before <c>UseAuthorization()</c> so every downstream
+/// <c>[Authorize]</c> / <c>RequirePermission</c> gate sees the resolved account context.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -42,6 +42,17 @@ namespace Storporate.Infrastructure.Authorization;
 /// the global query filter / RLS policy resolves this against <see cref="IAccountContext.UserId"/>
 /// when it runs).
 /// </para>
+/// <para>
+/// <see cref="IAccountContext.IpAddress"/> and <see cref="IAccountContext.UserAgent"/> are
+/// captured once here, at the start of the pipeline, so the audit trail
+/// (<c>AuditLogWriter</c>) can stamp them into each row's hash without re-reading the
+/// <see cref="HttpContext"/>, which isn't easily accessible from a raw-SQL writer running
+/// outside EF Core. The <c>User-Agent</c> header is truncated to
+/// <see cref="UserAgentMaxLength"/> characters here to match the
+/// <c>AuditLogEntries.UserAgent</c> column width — truncating at capture time means the
+/// hash always covers exactly the bytes that land in the DB, with no surprise truncation
+/// at write time.
+/// </para>
 /// </remarks>
 public static class AccountContextMiddleware
 {
@@ -55,25 +66,41 @@ public static class AccountContextMiddleware
             var writer = context.RequestServices
                 .GetRequiredService<IAccountContextWriter>();
 
-            // MapInboundClaims = false (set in Program.cs's AddJwtBearer block) means this
-            // lookup finds the raw "sub" claim rather than a remapped ClaimTypes.NameIdentifier.
             var subClaim = context.User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
             if (Guid.TryParse(subClaim, out var userId))
             {
                 writer.SetUserId(userId);
             }
 
-            // Trusting the signed actor_type claim avoids a per-request DB round-trip and
-            // stays fresh as long as the access token itself stays fresh.
             var actorTypeClaim = context.User.FindFirst(ActorTypeClaimType)?.Value;
             writer.SetIsAdministrator(string.Equals(actorTypeClaim, ActorTypes.Administrator, StringComparison.Ordinal));
 
-            // Endpoint metadata is only fully populated after routing runs (UseRouting), so
-            // this middleware must run after that too — see Program.cs's pipeline ordering.
             if (context.GetRouteValue(AccountIdRouteParameterName) is string accountIdText
                 && Guid.TryParse(accountIdText, out var accountId))
             {
                 writer.SetAccountId(accountId);
+            }
+
+            // RemoteIpAddress reflects the direct TCP peer (a reverse proxy's address,
+            // not the client's, once hosted behind one — noted in the STOR-63 plan as a
+            // future gap, not solved here). User-Agent is truncated to UserAgentMaxLength
+            // so the captured value is exactly the bytes the column can hold; absent or
+            // empty headers coerce to null so the audit row doesn't carry a meaningless
+            // empty string.
+            writer.SetIpAddress(context.Connection.RemoteIpAddress?.ToString());
+
+            var rawUserAgent = context.Request.Headers.UserAgent.ToString();
+            if (string.IsNullOrEmpty(rawUserAgent))
+            {
+                writer.SetUserAgent(null);
+            }
+            else if (rawUserAgent.Length > AuditLogEntry.UserAgentMaxLength)
+            {
+                writer.SetUserAgent(rawUserAgent[..AuditLogEntry.UserAgentMaxLength]);
+            }
+            else
+            {
+                writer.SetUserAgent(rawUserAgent);
             }
 
             await next(context);

@@ -42,6 +42,28 @@ public static class Permissions
     }
 
     /// <summary>
+    /// Permissions governing the SecurityGovernance module's own surfaces — the audit log
+    /// query endpoint and any future compliance / forensics / integrity-verification
+    /// tools that live in the same module. Adding a constant here automatically grants
+    /// it to the <see cref="SystemRoles.Administrator"/> role through the reflection-built
+    /// <see cref="All"/> set; no <c>SystemRoles.cs</c> edit is required.
+    /// </summary>
+    /// <remarks>
+    /// STOR-63 Phase 3: <see cref="ViewAuditLog"/> gates the
+    /// <c>GET /api/security-governance/audit-log</c> endpoint. The audit table is not
+    /// tenant-scoped (<see cref="Entities.AuditLogEntry"/> deliberately does not
+    /// implement <see cref="Entities.IAccountScoped"/>), so this permission — not the
+    /// global query filter — is what enforces "only Administrators can read it."
+    /// </remarks>
+    public static class SecurityGovernance
+    {
+        /// <summary>Read the platform-wide <see cref="Entities.AuditLogEntry"/> feed via
+        /// the Administrator-only query endpoint. Held exclusively by
+        /// <see cref="SystemRoles.Administrator"/> through <see cref="All"/>.</summary>
+        public const string ViewAuditLog = "security_governance:view_audit_log";
+    }
+
+    /// <summary>
     /// Every permission literal defined across the nested classes above, deduped and
     /// ordinal-sorted. Built once via reflection at class-initialization time so adding a new
     /// nested class / const is automatically reflected here without a hand-edited list.

@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
+using Storporate.Infrastructure.Auditing;
 using Storporate.Infrastructure.Authorization;
 using Storporate.SharedKernel.Authorization;
 
@@ -32,21 +33,34 @@ namespace Storporate.Api.Authorization;
 /// <see cref="AuthorizationHandlerContext.Succeed(IAuthorizationRequirement)"/> call) and let
 /// the framework return the default <see cref="AuthorizationFailure"/>.
 /// </para>
+/// <para>
+/// Both fail-closed branches now write a
+/// <c>"permission_denied"</c> row to <see cref="IAuditLogWriter"/> before returning, with
+/// <c>ResourceId</c> set to the checked permission literal so the future Integrity Layer
+/// (STOR-45) can answer "which permission was denied for which caller?" without re-walking the
+/// <c>AuthorizationHandlerContext</c>'s unrecoverable reasons. The audit row records what
+/// happened (a denial occurred), not what the framework will do with it next (a 403). The
+/// write happens before the early return so a denial that the framework turns into a 403
+/// always leaves a row, matching the "real event happened" invariant Phase 2 pins.
+/// </para>
 /// </remarks>
 public sealed class PermissionAuthorizationHandler : AuthorizationHandler<PermissionRequirement>
 {
     private readonly IAccountContext _accountContext;
     private readonly IPermissionService _permissionService;
     private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly IAuditLogWriter _auditLogWriter;
 
     public PermissionAuthorizationHandler(
         IAccountContext accountContext,
         IPermissionService permissionService,
-        IHttpContextAccessor httpContextAccessor)
+        IHttpContextAccessor httpContextAccessor,
+        IAuditLogWriter auditLogWriter)
     {
         _accountContext = accountContext;
         _permissionService = permissionService;
         _httpContextAccessor = httpContextAccessor;
+        _auditLogWriter = auditLogWriter;
     }
 
     protected override async Task HandleRequirementAsync(
@@ -65,10 +79,16 @@ public sealed class PermissionAuthorizationHandler : AuthorizationHandler<Permis
 
         // No ambient user id means AccountContextMiddleware didn't find a sub claim — the
         // policy's RequireAuthenticatedUser() ought to have already turned this request away
-        // with a 401. Fail closed rather than guessing.
+        // with a 401. Fail closed rather than guessing. Audit the denial before returning so
+        // the row exists regardless of how the framework turns the empty context into a 403.
         var userId = _accountContext.UserId;
         if (userId is null)
         {
+            await _auditLogWriter.WriteAsync(
+                action: "permission_denied",
+                resourceType: "Permission",
+                resourceId: requirement.Permission,
+                cancellationToken: _httpContextAccessor.HttpContext?.RequestAborted ?? CancellationToken.None);
             return;
         }
 
@@ -93,6 +113,16 @@ public sealed class PermissionAuthorizationHandler : AuthorizationHandler<Permis
         if (hasPermission)
         {
             context.Succeed(requirement);
+            return;
         }
+
+        // Permission check returned false — same fail-closed shape as the no-UserId branch
+        // above, audited identically so the future Integrity Layer sees one uniform action
+        // string for "the caller's permission set didn't include this requirement".
+        await _auditLogWriter.WriteAsync(
+            action: "permission_denied",
+            resourceType: "Permission",
+            resourceId: requirement.Permission,
+            cancellationToken: cancellationToken);
     }
 }

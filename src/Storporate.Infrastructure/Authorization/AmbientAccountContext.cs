@@ -30,10 +30,18 @@ namespace Storporate.Infrastructure.Authorization;
 public sealed class AmbientAccountContext : IAccountContext, IAccountContextWriter
 {
     // Three independent AsyncLocals rather than one struct-typed one — simpler semantics
-    // around "set AccountId but leave UserId alone".
+    // around "set AccountId but leave UserId alone". Same rationale applies to the
+    // IpAddress / UserAgent pair below.
     private readonly AsyncLocal<Guid?> _userId = new();
     private readonly AsyncLocal<Guid?> _accountId = new();
     private readonly AsyncLocal<bool> _isAdministrator = new();
+
+    // Audit-trail capture. Populated by AccountContextMiddleware from
+    // HttpContext.Connection.RemoteIpAddress and the User-Agent header so AuditLogWriter
+    // can stamp them into each row's hash without re-reading the HttpContext (which
+    // isn't easily accessible from a raw-SQL writer running outside EF Core).
+    private readonly AsyncLocal<string?> _ipAddress = new();
+    private readonly AsyncLocal<string?> _userAgent = new();
 
     /// <inheritdoc />
     public Guid? UserId => _userId.Value;
@@ -45,6 +53,12 @@ public sealed class AmbientAccountContext : IAccountContext, IAccountContextWrit
     public bool IsAdministrator => _isAdministrator.Value;
 
     /// <inheritdoc />
+    public string? IpAddress => _ipAddress.Value;
+
+    /// <inheritdoc />
+    public string? UserAgent => _userAgent.Value;
+
+    /// <inheritdoc />
     public void SetUserId(Guid? value) => _userId.Value = value;
 
     /// <inheritdoc />
@@ -52,4 +66,10 @@ public sealed class AmbientAccountContext : IAccountContext, IAccountContextWrit
 
     /// <inheritdoc />
     public void SetIsAdministrator(bool value) => _isAdministrator.Value = value;
+
+    /// <inheritdoc />
+    public void SetIpAddress(string? value) => _ipAddress.Value = value;
+
+    /// <inheritdoc />
+    public void SetUserAgent(string? value) => _userAgent.Value = value;
 }

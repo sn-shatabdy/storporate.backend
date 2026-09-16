@@ -4,8 +4,10 @@ using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.Identity;
 using Storporate.Modules.Identity.Exceptions;
 using Storporate.SharedKernel.Abstractions;
+using Storporate.SharedKernel.Auditing;
 using Storporate.SharedKernel.Entities;
 using Storporate.SharedKernel.Security;
+using Storporate.Tests.Unit.Fakes;
 
 namespace Storporate.Tests.Unit.Identity;
 
@@ -25,9 +27,10 @@ public class VerifyOtpHandlerTests
         await using var dbContext = CreateDbContext();
         SeedOtpCode(dbContext, Email, Code);
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         var result = await VerifyOtpHandler.ExecuteAsync(
-            Email, Code, ActorTypes.Student, userAgent: null, dbContext, tokenService, CancellationToken.None);
+            Email, Code, ActorTypes.Student, userAgent: null, dbContext, tokenService, auditLogWriter, CancellationToken.None);
 
         Assert.True(result.IsNewUser);
         Assert.Equal(ActorTypes.Student, result.User.ActorType);
@@ -37,6 +40,12 @@ public class VerifyOtpHandlerTests
 
         var reloadedCode = await dbContext.OtpCodes.SingleAsync();
         Assert.NotNull(reloadedCode.ConsumedAt);
+
+        // STOR-63 Phase 2: success path audits against the resulting User.Id, not the email.
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("login_succeeded", entry.Action);
+        Assert.Equal("User", entry.ResourceType);
+        Assert.Equal(result.User.Id.ToString(), entry.ResourceId);
     }
 
     [Fact]
@@ -45,9 +54,10 @@ public class VerifyOtpHandlerTests
         await using var dbContext = CreateDbContext();
         SeedOtpCode(dbContext, Email, Code);
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         var result = await VerifyOtpHandler.ExecuteAsync(
-            Email, Code, ActorTypes.Organization, userAgent: null, dbContext, tokenService, CancellationToken.None);
+            Email, Code, ActorTypes.Organization, userAgent: null, dbContext, tokenService, auditLogWriter, CancellationToken.None);
 
         Assert.Equal(VerificationStatuses.Unverified, result.User.VerificationStatus);
     }
@@ -58,22 +68,43 @@ public class VerifyOtpHandlerTests
         await using var dbContext = CreateDbContext();
         SeedOtpCode(dbContext, Email, Code);
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
-        await Assert.ThrowsAsync<ActorTypeRequiredException>(() =>
-            VerifyOtpHandler.ExecuteAsync(Email, Code, null, null, dbContext, tokenService, CancellationToken.None));
+        var thrown = await Assert.ThrowsAsync<ActorTypeRequiredException>(() =>
+            VerifyOtpHandler.ExecuteAsync(Email, Code, null, null, dbContext, tokenService, auditLogWriter, CancellationToken.None));
 
         Assert.Empty(await dbContext.Users.ToListAsync());
+
+        // STOR-63 Phase 2: the actor_type-required branch must record its audit row even
+        // though the handler subsequently throws — the throw is the user's view, the audit
+        // row is the system's. Both exist.
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("otp_verify_failed", entry.Action);
+        Assert.Equal("User", entry.ResourceType);
+        Assert.Equal(Email, entry.ResourceId);
+        Assert.Equal(AuditReasons.ActorTypeMissing, entry.MetadataJson);
+        Assert.NotNull(thrown);
     }
 
     [Fact]
-    public async Task ExecuteAsync_NewEmailWithUnrecognizedActorType_ThrowsActorTypeRequired()
+    public async Task ExecuteAsync_NewEmailWithUnrecognizedActorType_ThrowsActorTypeRequired_AndWritesActorTypeUnrecognizedReason()
     {
+        // Regression guard: the missing-actor-type branch and the unrecognized-actor-type
+        // branch must record distinct reason strings so a future admin UI can distinguish
+        // "caller sent nothing" from "caller sent a typo'd value" without re-walking
+        // User rows. Earlier versions of this handler collapsed both into a single
+        // "actor_type_required" reason, which lied about which branch fired.
         await using var dbContext = CreateDbContext();
         SeedOtpCode(dbContext, Email, Code);
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         await Assert.ThrowsAsync<ActorTypeRequiredException>(() =>
-            VerifyOtpHandler.ExecuteAsync(Email, Code, "NotARealActorType", null, dbContext, tokenService, CancellationToken.None));
+            VerifyOtpHandler.ExecuteAsync(Email, Code, "NotARealActorType", null, dbContext, tokenService, auditLogWriter, CancellationToken.None));
+
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("otp_verify_failed", entry.Action);
+        Assert.Equal(AuditReasons.ActorTypeUnrecognized, entry.MetadataJson);
     }
 
     [Fact]
@@ -92,27 +123,37 @@ public class VerifyOtpHandlerTests
         await dbContext.SaveChangesAsync();
         SeedOtpCode(dbContext, Email, Code);
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         var result = await VerifyOtpHandler.ExecuteAsync(
-            Email, Code, actorType: null, userAgent: null, dbContext, tokenService, CancellationToken.None);
+            Email, Code, actorType: null, userAgent: null, dbContext, tokenService, auditLogWriter, CancellationToken.None);
 
         Assert.False(result.IsNewUser);
         Assert.Equal(ActorTypes.Organization, result.User.ActorType);
     }
 
     [Fact]
-    public async Task ExecuteAsync_WrongCode_IncrementsAttemptCount_AndThrowsInvalid()
+    public async Task ExecuteAsync_WrongCode_IncrementsAttemptCount_AndThrowsInvalid_AndAuditsFailure()
     {
         await using var dbContext = CreateDbContext();
         var otpCode = SeedOtpCode(dbContext, Email, Code);
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         await Assert.ThrowsAsync<OtpInvalidException>(() =>
-            VerifyOtpHandler.ExecuteAsync(Email, WrongCode, ActorTypes.Student, null, dbContext, tokenService, CancellationToken.None));
+            VerifyOtpHandler.ExecuteAsync(Email, WrongCode, ActorTypes.Student, null, dbContext, tokenService, auditLogWriter, CancellationToken.None));
 
         var reloaded = await dbContext.OtpCodes.SingleAsync(o => o.Id == otpCode.Id);
         Assert.Equal(1, reloaded.AttemptCount);
         Assert.Null(reloaded.ConsumedAt);
+
+        // STOR-63 Phase 2: the wrong-code branch audits "wrong_code" specifically — not the
+        // generic "invalid" action — so a future audit-log query can distinguish a presentation
+        // of a typo'd code from one of an expired or already-consumed code without
+        // re-walking OtpCode rows.
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("otp_verify_failed", entry.Action);
+        Assert.Equal(AuditReasons.OtpWrongCode, entry.MetadataJson);
     }
 
     [Fact]
@@ -121,41 +162,63 @@ public class VerifyOtpHandlerTests
         await using var dbContext = CreateDbContext();
         SeedOtpCode(dbContext, Email, Code, maxAttempts: 5);
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         for (var attempt = 0; attempt < 5; attempt++)
         {
             await Assert.ThrowsAsync<OtpInvalidException>(() =>
-                VerifyOtpHandler.ExecuteAsync(Email, WrongCode, ActorTypes.Student, null, dbContext, tokenService, CancellationToken.None));
+                VerifyOtpHandler.ExecuteAsync(Email, WrongCode, ActorTypes.Student, null, dbContext, tokenService, auditLogWriter, CancellationToken.None));
         }
 
         // The 6th attempt — presenting the CORRECT code — must still fail as locked, not succeed.
         await Assert.ThrowsAsync<OtpLockedException>(() =>
-            VerifyOtpHandler.ExecuteAsync(Email, Code, ActorTypes.Student, null, dbContext, tokenService, CancellationToken.None));
+            VerifyOtpHandler.ExecuteAsync(Email, Code, ActorTypes.Student, null, dbContext, tokenService, auditLogWriter, CancellationToken.None));
 
         Assert.Empty(await dbContext.Users.ToListAsync());
+
+        // The 5 wrong-code attempts produce 5 "otp_verify_failed" rows; the 6th locked
+        // attempt produces one distinct "otp_locked" row. All 6 rows exist regardless of the
+        // throw that follows each call — that's the whole point of the write-before-throw
+        // discipline.
+        Assert.Equal(6, auditLogWriter.Recorded.Count);
+        Assert.Equal(5, auditLogWriter.Recorded.Count(e => e.Action == "otp_verify_failed"));
+        var lockedEntry = Assert.Single(auditLogWriter.Recorded, e => e.Action == "otp_locked");
+        Assert.Equal("User", lockedEntry.ResourceType);
+        Assert.Equal(Email, lockedEntry.ResourceId);
+        Assert.Null(lockedEntry.MetadataJson);
     }
 
     [Fact]
-    public async Task ExecuteAsync_ExpiredCode_ThrowsInvalid_EvenWithCorrectCode()
+    public async Task ExecuteAsync_ExpiredCode_ThrowsInvalid_AndAuditsFailure()
     {
         await using var dbContext = CreateDbContext();
         SeedOtpCode(dbContext, Email, Code, expiresAt: DateTime.UtcNow.AddMinutes(-1));
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         await Assert.ThrowsAsync<OtpInvalidException>(() =>
-            VerifyOtpHandler.ExecuteAsync(Email, Code, ActorTypes.Student, null, dbContext, tokenService, CancellationToken.None));
+            VerifyOtpHandler.ExecuteAsync(Email, Code, ActorTypes.Student, null, dbContext, tokenService, auditLogWriter, CancellationToken.None));
 
         Assert.Empty(await dbContext.Users.ToListAsync());
+
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("otp_verify_failed", entry.Action);
+        Assert.Equal(AuditReasons.OtpExpired, entry.MetadataJson);
     }
 
     [Fact]
-    public async Task ExecuteAsync_NoPendingCodeForEmail_ThrowsInvalid()
+    public async Task ExecuteAsync_NoPendingCodeForEmail_ThrowsInvalid_AndAuditsFailure()
     {
         await using var dbContext = CreateDbContext();
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
         await Assert.ThrowsAsync<OtpInvalidException>(() =>
-            VerifyOtpHandler.ExecuteAsync(Email, Code, ActorTypes.Student, null, dbContext, tokenService, CancellationToken.None));
+            VerifyOtpHandler.ExecuteAsync(Email, Code, ActorTypes.Student, null, dbContext, tokenService, auditLogWriter, CancellationToken.None));
+
+        var entry = Assert.Single(auditLogWriter.Recorded);
+        Assert.Equal("otp_verify_failed", entry.Action);
+        Assert.Equal(AuditReasons.OtpNoPendingCode, entry.MetadataJson);
     }
 
     [Fact]
@@ -164,11 +227,12 @@ public class VerifyOtpHandlerTests
         await using var dbContext = CreateDbContext();
         SeedOtpCode(dbContext, Email, Code);
         var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
 
-        await VerifyOtpHandler.ExecuteAsync(Email, Code, ActorTypes.Student, null, dbContext, tokenService, CancellationToken.None);
+        await VerifyOtpHandler.ExecuteAsync(Email, Code, ActorTypes.Student, null, dbContext, tokenService, auditLogWriter, CancellationToken.None);
 
         await Assert.ThrowsAsync<OtpInvalidException>(() =>
-            VerifyOtpHandler.ExecuteAsync(Email, Code, ActorTypes.Student, null, dbContext, tokenService, CancellationToken.None));
+            VerifyOtpHandler.ExecuteAsync(Email, Code, ActorTypes.Student, null, dbContext, tokenService, auditLogWriter, CancellationToken.None));
     }
 
     [Fact]

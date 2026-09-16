@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Options;
+using Storporate.Infrastructure.Auditing;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Infrastructure.Security;
 using Storporate.Infrastructure.Security.RateLimiting;
@@ -29,11 +30,12 @@ public static class IdentityEndpoints
                 WriteDbContext dbContext,
                 IEmailSender emailSender,
                 IOptions<OtpOptions> otpOptions,
+                IAuditLogWriter auditLogWriter,
                 CancellationToken cancellationToken) =>
             {
                 await validator.ValidateAndThrowAsync(request, cancellationToken);
 
-                await RequestOtpHandler.ExecuteAsync(request.Email, dbContext, emailSender, otpOptions, cancellationToken);
+                await RequestOtpHandler.ExecuteAsync(request.Email, dbContext, emailSender, otpOptions, auditLogWriter, cancellationToken);
 
                 // Identical body/status regardless of whether `request.Email` has an account —
                 // see RequestOtpHandler's no-account-enumeration doc comment.
@@ -47,6 +49,7 @@ public static class IdentityEndpoints
                 HttpContext httpContext,
                 WriteDbContext dbContext,
                 IJwtTokenService tokenService,
+                IAuditLogWriter auditLogWriter,
                 CancellationToken cancellationToken) =>
             {
                 await validator.ValidateAndThrowAsync(request, cancellationToken);
@@ -59,6 +62,7 @@ public static class IdentityEndpoints
                     string.IsNullOrWhiteSpace(userAgent) ? null : userAgent,
                     dbContext,
                     tokenService,
+                    auditLogWriter,
                     cancellationToken);
 
                 return Results.Ok(new VerifyOtpResponse(
@@ -81,6 +85,7 @@ public static class IdentityEndpoints
                 WriteDbContext dbContext,
                 IGoogleIdTokenValidator googleIdTokenValidator,
                 IJwtTokenService tokenService,
+                IAuditLogWriter auditLogWriter,
                 CancellationToken cancellationToken) =>
             {
                 await validator.ValidateAndThrowAsync(request, cancellationToken);
@@ -93,6 +98,7 @@ public static class IdentityEndpoints
                     dbContext,
                     googleIdTokenValidator,
                     tokenService,
+                    auditLogWriter,
                     cancellationToken);
 
                 return Results.Ok(new GoogleLoginResponse(
@@ -113,6 +119,7 @@ public static class IdentityEndpoints
                 HttpContext httpContext,
                 WriteDbContext dbContext,
                 IJwtTokenService tokenService,
+                IAuditLogWriter auditLogWriter,
                 CancellationToken cancellationToken) =>
             {
                 await validator.ValidateAndThrowAsync(request, cancellationToken);
@@ -123,6 +130,7 @@ public static class IdentityEndpoints
                     string.IsNullOrWhiteSpace(userAgent) ? null : userAgent,
                     dbContext,
                     tokenService,
+                    auditLogWriter,
                     cancellationToken);
 
                 return Results.Ok(new RefreshSessionResponse(
@@ -135,9 +143,10 @@ public static class IdentityEndpoints
         app.MapPost("/api/auth/logout", async (
                 ClaimsPrincipal caller,
                 WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
                 CancellationToken cancellationToken) =>
             {
-                await LogoutHandler.ExecuteAsync(caller, dbContext, cancellationToken);
+                await LogoutHandler.ExecuteAsync(caller, dbContext, auditLogWriter, cancellationToken);
                 return Results.NoContent();
             })
             .RequireAuthorization();
@@ -145,9 +154,10 @@ public static class IdentityEndpoints
         app.MapPost("/api/auth/logout-all", async (
                 ClaimsPrincipal caller,
                 WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
                 CancellationToken cancellationToken) =>
             {
-                var revokedCount = await LogoutAllHandler.ExecuteAsync(caller, dbContext, cancellationToken);
+                var revokedCount = await LogoutAllHandler.ExecuteAsync(caller, dbContext, auditLogWriter, cancellationToken);
                 return Results.Ok(new { revokedSessions = revokedCount });
             })
             .RequireAuthorization();

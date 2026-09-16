@@ -11,12 +11,16 @@ namespace Storporate.Infrastructure.Authorization;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Three pieces of state, not two: <see cref="UserId"/> (the JWT subject — always present when
-/// the request is authenticated), <see cref="AccountId"/> (the workspace the call is being made
-/// <em>in</em> — present when the route binds an <c>{accountId}</c> route value or when an
-/// explicit ambient-account plumbing path sets it), and <see cref="IsAdministrator"/>
+/// Five pieces of state, not three: <see cref="UserId"/> (the JWT subject — always present
+/// when the request is authenticated), <see cref="AccountId"/> (the workspace the call is
+/// being made <em>in</em> — present when the route binds an <c>{accountId}</c> route value
+/// or when an explicit ambient-account plumbing path sets it), <see cref="IsAdministrator"/>
 /// (precomputed from the JWT <c>actor_type</c> claim so the handler can short-circuit the
-/// workspace-isolation bypass in one branch rather than re-reading the claim each time).
+/// workspace-isolation bypass in one branch rather than re-reading the claim each time),
+/// <see cref="IpAddress"/> (the remote TCP peer IP, for the audit trail), and
+/// <see cref="UserAgent"/> (the request's <c>User-Agent</c> header, truncated to
+/// <see cref="AccountContextMiddleware.UserAgentMaxLength"/>, also for the audit trail —
+/// STOR-63 Phase 1 added the last two).
 /// </para>
 /// <para>
 /// The split between an <see cref="IAccountContext"/> reader interface and an
@@ -48,6 +52,19 @@ public interface IAccountContext
     /// middleware time from the JWT <c>actor_type</c> claim so every consumer can short-circuit
     /// the workspace-isolation bypass in a single bool check.</summary>
     bool IsAdministrator { get; }
+
+    /// <summary>The remote TCP peer IP captured by <see cref="AccountContextMiddleware"/> from
+    /// <c>HttpContext.Connection.RemoteIpAddress</c>. Null when no connection address is
+    /// available (loopback test paths, very early in the pipeline). Captured for the audit
+    /// trail (<see cref="SharedKernel.Auditing.AuditLogHash"/> takes it as one of the eleven
+    /// hash fields).</summary>
+    string? IpAddress { get; }
+
+    /// <summary>The <c>User-Agent</c> header value captured by <see cref="AccountContextMiddleware"/>,
+    /// truncated to 512 characters to match the <see cref="SharedKernel.Entities.AuditLogEntry.UserAgent"/>
+    /// column width. Null when the header is absent or empty. Captured for the audit trail.
+    /// </summary>
+    string? UserAgent { get; }
 }
 
 /// <summary>
@@ -73,4 +90,14 @@ public interface IAccountContextWriter
     /// round-trip is needed at request time — see the middleware's doc comment for the
     /// rationale).</summary>
     void SetIsAdministrator(bool value);
+
+    /// <summary>Sets the ambient <see cref="IAccountContext.IpAddress"/>. Called by
+    /// <see cref="AccountContextMiddleware"/> from <c>HttpContext.Connection.RemoteIpAddress</c>.
+    /// </summary>
+    void SetIpAddress(string? value);
+
+    /// <summary>Sets the ambient <see cref="IAccountContext.UserAgent"/>. Called by
+    /// <see cref="AccountContextMiddleware"/> from the <c>User-Agent</c> request header;
+    /// already truncated to 512 characters by the caller.</summary>
+    void SetUserAgent(string? value);
 }

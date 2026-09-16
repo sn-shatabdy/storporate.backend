@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Storporate.Infrastructure.Auditing;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.Identity.Exceptions;
 using Storporate.SharedKernel.Abstractions;
@@ -20,6 +21,23 @@ namespace Storporate.Modules.Identity;
 ///   4. Issue a new token pair whose session belongs to the same <c>FamilyId</c>; the old
 ///      session's <c>ReplacedBySessionId</c> is wired to the new one.
 /// </summary>
+/// <remarks>
+/// Five distinct audit outcomes, written before the corresponding
+/// return / throw so the row is captured even when the throw propagates:
+/// <list type="bullet">
+///   <item><c>"token_refresh_failed"</c> for each of the three invalid branches (no row,
+///   already revoked, expired); also for the unresolvable-<see cref="User"/> guard.</item>
+///   <item><c>"refresh_token_reused"</c> for the theft branch — written <em>after</em>
+///   <see cref="RevokeEntireFamilyAsync"/> runs so the audit row reflects the family
+///   revocation already being in flight (the row's <c>CreatedAt</c> postdates every revoked
+///   session's <c>RevokedAt</c>, which is the right causal ordering for forensic review).</item>
+///   <item><c>"token_refreshed"</c> on the happy-path rotation success.</item>
+/// </list>
+/// The reuse action is deliberately a different string from the plain failure action — the
+/// audit log distinguishes "stale token presented again" (low signal) from "rotated-out token
+/// presented again" (theft signal), which is exactly the distinction the future Integrity
+/// Layer (STOR-45) will key off.
+/// </remarks>
 public static class RefreshSessionHandler
 {
     public static async Task<AuthTokenResult> ExecuteAsync(
@@ -27,6 +45,7 @@ public static class RefreshSessionHandler
         string? userAgent,
         WriteDbContext dbContext,
         IJwtTokenService tokenService,
+        IAuditLogWriter auditLogWriter,
         CancellationToken cancellationToken)
     {
         var hashedRefreshToken = Sha256CodeHasher.Hash(refreshToken);
@@ -40,6 +59,11 @@ public static class RefreshSessionHandler
         // whether the token was ever issued).
         if (session is null)
         {
+            await auditLogWriter.WriteAsync(
+                action: "token_refresh_failed",
+                resourceType: "Session",
+                resourceId: null,
+                cancellationToken: cancellationToken);
             throw new RefreshTokenInvalidException();
         }
 
@@ -47,11 +71,21 @@ public static class RefreshSessionHandler
         // or already-logged-out token, not a theft signal.
         if (session.RevokedAt is not null)
         {
+            await auditLogWriter.WriteAsync(
+                action: "token_refresh_failed",
+                resourceType: "Session",
+                resourceId: null,
+                cancellationToken: cancellationToken);
             throw new RefreshTokenInvalidException();
         }
 
         if (session.ExpiresAt <= now)
         {
+            await auditLogWriter.WriteAsync(
+                action: "token_refresh_failed",
+                resourceType: "Session",
+                resourceId: null,
+                cancellationToken: cancellationToken);
             throw new RefreshTokenInvalidException();
         }
 
@@ -60,6 +94,11 @@ public static class RefreshSessionHandler
         if (session.ReplacedBySessionId is not null)
         {
             await RevokeEntireFamilyAsync(dbContext, session.FamilyId, now, cancellationToken);
+            await auditLogWriter.WriteAsync(
+                action: "refresh_token_reused",
+                resourceType: "Session",
+                resourceId: null,
+                cancellationToken: cancellationToken);
             throw new RefreshTokenReusedException();
         }
 
@@ -67,6 +106,11 @@ public static class RefreshSessionHandler
         {
             // Navigation property not loaded despite the Include — guard so we never mint
             // tokens against a user nobody can resolve.
+            await auditLogWriter.WriteAsync(
+                action: "token_refresh_failed",
+                resourceType: "Session",
+                resourceId: null,
+                cancellationToken: cancellationToken);
             throw new RefreshTokenInvalidException();
         }
 
@@ -86,8 +130,19 @@ public static class RefreshSessionHandler
         if (tokens is null)
         {
             await RevokeEntireFamilyAsync(dbContext, session.FamilyId, now, cancellationToken);
+            await auditLogWriter.WriteAsync(
+                action: "refresh_token_reused",
+                resourceType: "Session",
+                resourceId: null,
+                cancellationToken: cancellationToken);
             throw new RefreshTokenReusedException();
         }
+
+        await auditLogWriter.WriteAsync(
+            action: "token_refreshed",
+            resourceType: "Session",
+            resourceId: null,
+            cancellationToken: cancellationToken);
 
         return tokens;
     }
