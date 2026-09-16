@@ -164,7 +164,10 @@ builder.Services.AddPortfolioHandlers();
 // Identity module stays unaware of which concrete sender is wired up (it only knows about
 // IEmailSender) and there's exactly one place in the codebase that picks the provider.
 // `AddIdentityHandlers()` no longer calls `AddResendEmailSender()` directly for that reason. ---
-var emailProvider = builder.Configuration.GetValue<string>("Email:Provider") ?? "Resend";
+// No ?? "Resend" fallback: a missing Email:Provider must fail at startup like every other
+// Options-bound section (ValidateOnStart above), not silently switch to a provider whose
+// credentials may be a placeholder in this environment.
+var emailProvider = builder.Configuration.GetValue<string>("Email:Provider");
 switch (emailProvider)
 {
     case "Smtp":
@@ -175,7 +178,7 @@ switch (emailProvider)
         break;
     default:
         throw new InvalidOperationException(
-            $"Email:Provider must be 'Resend' or 'Smtp' (got '{emailProvider}').");
+            $"Email:Provider must be 'Resend' or 'Smtp' (got '{emailProvider ?? "<unset>"}').");
 }
 
 // --- AI provider (Bionic-hosted local LLM, OpenAI-compatible) ---

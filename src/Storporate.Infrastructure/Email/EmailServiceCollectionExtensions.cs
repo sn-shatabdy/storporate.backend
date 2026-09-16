@@ -5,7 +5,12 @@ using Storporate.SharedKernel.Abstractions;
 
 namespace Storporate.Infrastructure.Email;
 
-/// <summary>DI entry point wiring the Resend-backed <see cref="IEmailSender"/> implementation.</summary>
+/// <summary>
+/// DI entry points wiring every <see cref="IEmailSender"/> implementation in this codebase.
+/// Provider selection itself lives in <c>Program.cs</c> (keyed off the <c>Email:Provider</c>
+/// config value); this class only exposes one <c>Add*EmailSender()</c> method per concrete
+/// implementation, so the call site reads as a 1:1 map from provider name to registration.
+/// </summary>
 public static class EmailServiceCollectionExtensions
 {
     /// <summary>
