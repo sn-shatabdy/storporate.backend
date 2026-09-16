@@ -53,7 +53,7 @@ public sealed class SmtpEmailSender(
         var message = new MimeMessage();
         message.From.Add(new MailboxAddress(smtpOptions.FromName, smtpOptions.FromEmail));
         message.To.Add(MailboxAddress.Parse(toEmail));
-        message.Subject = "Your Storporate verification code";
+        message.Subject = OtpEmailTemplateBuilder.Subject;
         message.Body = new BodyBuilder
         {
             HtmlBody = html,

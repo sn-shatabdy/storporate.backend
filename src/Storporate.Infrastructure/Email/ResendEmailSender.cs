@@ -42,7 +42,7 @@ public sealed class ResendEmailSender(
         {
             From = new EmailAddress { Email = resendOptions.FromEmail, DisplayName = resendOptions.FromName },
             To = toEmail,
-            Subject = "Your Storporate verification code",
+            Subject = OtpEmailTemplateBuilder.Subject,
             HtmlBody = html,
             TextBody = text,
         };

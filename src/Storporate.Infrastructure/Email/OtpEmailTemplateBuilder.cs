@@ -26,7 +26,14 @@ public static class OtpEmailTemplateBuilder
     /// <summary>Length of an OTP code, from <c>OtpOptions.CodeLength</c> default.</summary>
     private const int CodeLength = 6;
 
-    /// <summary>Builds the HTML and plain-text bodies for an OTP email carrying <paramref name="code"/>.</summary>
+    /// <summary>
+    /// Subject line shared by every <see cref="Storporate.SharedKernel.Abstractions.IEmailSender"/>
+    /// implementation. Centralized here so the body's copy and the line that names the email in
+    /// a recipient's inbox never drift apart.
+    /// </summary>
+    public const string Subject = "Your Storporate verification code";
+
+    /// <summary>Builds the subject, HTML body, and plain-text body for an OTP email carrying <paramref name="code"/>.</summary>
     public static (string Html, string Text) Build(string code)
     {
         ArgumentException.ThrowIfNullOrEmpty(code);
@@ -87,7 +94,7 @@ public static class OtpEmailTemplateBuilder
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Your Storporate verification code</title>
+<title>{Subject}</title>
 </head>
 <body style="margin:0; padding:0; background-color:#fbf8ec;">
 <div style="width:100%; background-color:#fbf8ec; padding:48px 16px; box-sizing:border-box; font-family:'Manrope', -apple-system, 'Helvetica Neue', Arial, sans-serif;">
