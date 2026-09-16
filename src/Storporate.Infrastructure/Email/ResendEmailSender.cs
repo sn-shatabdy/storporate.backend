@@ -16,6 +16,10 @@ namespace Storporate.Infrastructure.Email;
 /// Postgres; (2) a Resend call failure is only swallowed in Development (where the code was
 /// already logged above), never in Production, where a delivery failure must still surface as a
 /// real error rather than silently pretending the code was sent.
+///
+/// Body construction (HTML + plain-text fallback) is delegated to
+/// <see cref="OtpEmailTemplateBuilder"/> so every <see cref="IEmailSender"/> in this codebase
+/// shares one source of truth for the email's copy and structure.
 /// </summary>
 public sealed class ResendEmailSender(
     IResend resendClient,
@@ -32,13 +36,15 @@ public sealed class ResendEmailSender(
         }
 
         var resendOptions = options.Value;
+        var (subject, html, text) = OtpEmailTemplateBuilder.Build(code);
+
         var message = new EmailMessage
         {
             From = new EmailAddress { Email = resendOptions.FromEmail, DisplayName = resendOptions.FromName },
             To = toEmail,
-            Subject = "Your Storporate verification code",
-            TextBody = $"Your verification code is {code}. It expires shortly and can only be used once. "
-                + "If you didn't request this, you can safely ignore this email.",
+            Subject = subject,
+            HtmlBody = html,
+            TextBody = text,
         };
 
         try

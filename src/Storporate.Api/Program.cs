@@ -94,6 +94,15 @@ builder.Services
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
+// STOR-64 Phase 1: SmtpOptions is bound unconditionally alongside ResendOptions — both
+// providers' sections are validated at startup regardless of which is the active provider, by
+// deliberate simplicity (both already have real values in .env today, so the cost is zero).
+builder.Services
+    .AddOptions<SmtpOptions>()
+    .Bind(builder.Configuration.GetSection(SmtpOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
 builder.Services
     .AddOptions<JwtOptions>()
     .Bind(builder.Configuration.GetSection(JwtOptions.SectionName))
@@ -148,6 +157,29 @@ builder.Services.AddPlatformFoundationsHandlers();
 builder.Services.AddIdentityHandlers();
 builder.Services.AddSecurityGovernanceHandlers();
 builder.Services.AddPortfolioHandlers();
+
+// --- Email provider switch (STOR-64 Phase 1): the first real DI-branching switch in this
+// codebase. Selected via `Email:Provider` ("Resend" or "Smtp"). Lives here, alongside every
+// other cross-cutting config/DI decision, rather than inside AddIdentityHandlers() — so the
+// Identity module stays unaware of which concrete sender is wired up (it only knows about
+// IEmailSender) and there's exactly one place in the codebase that picks the provider.
+// `AddIdentityHandlers()` no longer calls `AddResendEmailSender()` directly for that reason. ---
+// No ?? "Resend" fallback: a missing Email:Provider must fail at startup like every other
+// Options-bound section (ValidateOnStart above), not silently switch to a provider whose
+// credentials may be a placeholder in this environment.
+var emailProvider = builder.Configuration.GetValue<string>("Email:Provider");
+switch (emailProvider)
+{
+    case "Smtp":
+        builder.Services.AddSmtpEmailSender();
+        break;
+    case "Resend":
+        builder.Services.AddResendEmailSender();
+        break;
+    default:
+        throw new InvalidOperationException(
+            $"Email:Provider must be 'Resend' or 'Smtp' (got '{emailProvider ?? "<unset>"}').");
+}
 
 // --- AI provider (Bionic-hosted local LLM, OpenAI-compatible) ---
 builder.Services.AddBionicLlmProvider();
