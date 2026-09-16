@@ -24,6 +24,7 @@ using Storporate.Modules.PlatformFoundations;
 using Storporate.Modules.SecurityGovernance;
 using Storporate.Modules.Portfolio;
 using Storporate.Modules.PlatformFoundations.Diagnostics;
+using Storporate.Infrastructure.Jobs;
 using Storporate.SharedKernel.Abstractions;
 using Storporate.SharedKernel.Security;
 using Storporate.SharedKernel.Storage;
@@ -158,6 +159,13 @@ builder.Services.AddIdentityHandlers();
 builder.Services.AddSecurityGovernanceHandlers();
 builder.Services.AddPortfolioHandlers();
 
+// --- TimeProvider: STOR-38 Phase 2 background worker uses TimeProvider.GetUtcNow()
+// to stamp job StartedAt / UpdatedAt / CompletedAt without going through DateTimeOffset.UtcNow
+// directly (the latter is a known testability hurdle for hosted services). Registered
+// as the platform default — a future story that needs to fake it in production can
+// override this single registration. ---
+builder.Services.AddSingleton(TimeProvider.System);
+
 // --- Email provider switch (STOR-64 Phase 1): the first real DI-branching switch in this
 // codebase. Selected via `Email:Provider` ("Resend" or "Smtp"). Lives here, alongside every
 // other cross-cutting config/DI decision, rather than inside AddIdentityHandlers() — so the
@@ -186,6 +194,14 @@ builder.Services.AddBionicLlmProvider();
 
 // --- Artifact storage (S3-compatible; local MinIO now, real Cloudflare R2 later) ---
 builder.Services.AddArtifactStorage();
+
+// --- Background workers: STOR-38 Phase 2 — the first BackgroundService in this codebase.
+// PortfolioAnalysisWorker polls the shared Jobs table for AnalyzePortfolioItem rows and
+// processes them on a fresh DI scope per tick. Registered as a hosted service so it
+// starts (and stops) with the host; its dependencies (WriteDbContext, ILlmClient,
+// EvidenceContentExtractor) all live in the same DI graph the request pipeline already
+// uses, and AddPortfolioHandlers above has already wired the scoped ones. ---
+builder.Services.AddHostedService<PortfolioAnalysisWorker>();
 
 // --- JWT access/refresh token issuance (STOR-61 Phase 2) ---
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();

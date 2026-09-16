@@ -52,6 +52,8 @@ public sealed class GlobalExceptionHandler(
                 (StatusCodes.Status401Unauthorized, new ErrorResponse("google_login_failed", googleLoginFailedException.Message)),
             GoogleEmailNotVerifiedException googleEmailNotVerifiedException =>
                 (StatusCodes.Status409Conflict, new ErrorResponse("google_email_not_verified", googleEmailNotVerifiedException.Message)),
+            Storporate.Modules.Portfolio.PortfolioAnalysisNotRetryableException portfolioAnalysisNotRetryableException =>
+                (StatusCodes.Status409Conflict, new ErrorResponse("portfolio_analysis_not_retryable", portfolioAnalysisNotRetryableException.Message)),
             ActorTypeRequiredException actorTypeRequiredException =>
                 (StatusCodes.Status400BadRequest, new ErrorResponse("actor_type_required", actorTypeRequiredException.Message)),
             UnknownSortKeyException unknownSortKeyException =>

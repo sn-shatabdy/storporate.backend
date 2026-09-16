@@ -13,6 +13,13 @@
     <PackageReference Include="FluentValidation" Version="12.1.1" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.10" />
+    <!-- STOR-38 Phase 2: the EvidenceContentExtractor (Modules/Portfolio/Analysis/) runs
+         fully locally — PdfPig for PDF, OpenXML SDK for DOCX, both operate in-process
+         against the bytes already in IArtifactStore, no external API. Chosen over
+         cloud-hosted extraction (e.g. Textract) to match the local-first architecture
+         constraint from the plan (no new external API dependency). -->
+    <PackageReference Include="DocumentFormat.OpenXml" Version="3.3.0" />
+    <PackageReference Include="PdfPig" Version="0.1.16" />
   </ItemGroup>
 
 </Project>

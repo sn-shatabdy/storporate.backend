@@ -113,7 +113,9 @@ public static class ListPortfolioItemsHandler
                 item.FileSizeBytes,
                 item.ExternalUrl,
                 item.Description,
-                item.CreatedAt))
+                item.CreatedAt,
+                item.AnalysisStatus,
+                item.LastAnalyzedAt))
             .Skip(spec.Skip)
             .Take(spec.PageSize)
             .ToListAsync(cancellationToken)

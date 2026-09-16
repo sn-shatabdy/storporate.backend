@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.Portfolio;
+using Storporate.Modules.Portfolio.Analysis;
 using Storporate.SharedKernel.Entities;
 using Storporate.SharedKernel.Storage;
 using Storporate.Tests.Unit.Portfolio;
@@ -17,6 +18,15 @@ namespace Storporate.Tests.Unit.Portfolio;
 /// and produce only the DB row with the URL. The artifact key is never derived
 /// from the client-supplied filename (path-traversal mitigation).
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>STOR-38 Phase 2.</b> Every accepted submission also enqueues one
+/// <see cref="Job"/> of type <see cref="PortfolioJobTypes.AnalyzePortfolioItem"/>
+/// so the STOR-38 background worker can analyze it asynchronously. The two
+/// commit-and-enqueue jobs run in one <c>SaveChangesAsync</c> call so a
+/// half-committed state (item without its job, or vice versa) is impossible.
+/// </para>
+/// </remarks>
 public class CreatePortfolioItemHandlerTests
 {
     [Fact]
@@ -78,6 +88,12 @@ public class CreatePortfolioItemHandlerTests
         // remarks).
         Assert.Equal(stored.Id, response.Id);
         Assert.Equal(PortfolioSubmissionTypes.File, response.SubmissionType);
+
+        // STOR-38 Phase 3 addendum: the create response carries the same
+        // AnalysisStatus / LastAnalyzedAt fields the list endpoint surfaces. A
+        // freshly created item is always NotAnalyzed with a null timestamp.
+        Assert.Equal(PortfolioAnalysisStatuses.NotAnalyzed, response.AnalysisStatus);
+        Assert.Null(response.LastAnalyzedAt);
     }
 
     [Fact]
@@ -115,6 +131,11 @@ public class CreatePortfolioItemHandlerTests
 
         Assert.Equal(PortfolioSubmissionTypes.Link, response.SubmissionType);
         Assert.Equal("https://example.com/portfolio", response.ExternalUrl);
+
+        // STOR-38 Phase 3 addendum: a fresh link submission's analysis state is
+        // also surfaced on the create response — NotAnalyzed with no timestamp.
+        Assert.Equal(PortfolioAnalysisStatuses.NotAnalyzed, response.AnalysisStatus);
+        Assert.Null(response.LastAnalyzedAt);
     }
 
     [Fact]
@@ -133,6 +154,49 @@ public class CreatePortfolioItemHandlerTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             CreatePortfolioItemHandler.ExecuteAsync(request, dbContext, artifactStore, accountContext, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_LinkSubmission_EnqueuesPendingAnalysisJobReferencingTheNewItem()
+    {
+        // The Phase 2 acceptance criterion: submitting a portfolio item via
+        // CreatePortfolioItemHandler creates exactly one Job row with Type =
+        // "AnalyzePortfolioItem", Status = "Pending", and a payload referencing
+        // the new item's id. This test pins that contract directly against the
+        // handler (no HTTP pipeline) so the enqueue is exercised on the same
+        // WriteDbContext the rest of the unit suite already stands up.
+        var accountContext = new AmbientAccountContext();
+        var accountId = Guid.NewGuid();
+        accountContext.SetUserId(accountId);
+        accountContext.SetAccountId(accountId);
+        await using var dbContext = CreateDbContext(accountContext);
+        var artifactStore = new FakeArtifactStore();
+
+        var request = new CreatePortfolioItemRequest
+        {
+            Label = "Senior capstone",
+            Category = PortfolioCategories.PortfolioLink,
+            Description = "Built a Next.js dashboard.",
+            ExternalUrl = "https://example.com/portfolio",
+            File = null,
+        };
+
+        var response = await CreatePortfolioItemHandler.ExecuteAsync(
+            request, dbContext, artifactStore, accountContext, CancellationToken.None);
+
+        var job = await dbContext.Jobs.SingleAsync();
+        Assert.Equal(PortfolioJobTypes.AnalyzePortfolioItem, job.Type);
+        Assert.Equal(JobStatus.Pending, job.Status);
+        Assert.Equal(accountId, job.AccountId);
+        Assert.Equal(0, job.AttemptCount);
+        Assert.Null(job.StartedAt);
+        Assert.Null(job.CompletedAt);
+
+        // Payload is the AnalyzePortfolioItem payload type, deserialized back
+        // into the same record the worker's processor will read.
+        var payload = System.Text.Json.JsonSerializer.Deserialize<AnalyzePortfolioItemPayload>(job.PayloadJson);
+        Assert.NotNull(payload);
+        Assert.Equal(response.Id, payload!.PortfolioItemId);
     }
 
     private static WriteDbContext CreateDbContext(AmbientAccountContext accountContext) =>

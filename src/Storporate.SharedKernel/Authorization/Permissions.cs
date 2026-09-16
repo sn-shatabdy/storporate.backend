@@ -93,6 +93,13 @@ public static class Permissions
         /// <summary>Delete a <see cref="Entities.PortfolioItem"/> owned by the caller's
         /// account (hard-delete: DB row and storage blob).</summary>
         public const string Delete = "portfolio:delete";
+
+        /// <summary>Re-queue analysis for a <see cref="Entities.PortfolioItem"/> whose
+        /// <c>AnalysisStatus</c> is <c>Failed</c> (STOR-38 Phase 3 endpoint
+        /// <c>POST /api/portfolio/items/{id}/analysis/retry</c>). Split from <see cref="Read"/>
+        /// so a future read-only mentor persona can read a student's portfolio without
+        /// gaining the ability to nudge the worker on the student's behalf.</summary>
+        public const string Retry = "portfolio:retry";
     }
 
     /// <summary>

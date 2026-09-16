@@ -74,4 +74,21 @@ public sealed class PortfolioItem : IAccountScoped
     public string? Description { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }
+
+    /// <summary>One of <see cref="PortfolioAnalysisStatuses"/>. Defaults to
+    /// <see cref="PortfolioAnalysisStatuses.NotAnalyzed"/> on insert so a freshly-created
+    /// row is in the documented initial state without any application-side write, and so the
+    /// migration adding the column can back-fill existing rows in-place via a SQL DEFAULT.
+    /// STOR-38 Phase 2's background worker is what flips this through the rest of the
+    /// state machine (<c>Analyzing</c> → <c>Analyzed</c> / <c>Failed</c> /
+    /// <c>Unsupported</c>); Phase 3's retry endpoint flips <c>Failed</c> back to
+    /// <c>NotAnalyzed</c> on a user-initiated retry.</summary>
+    public string AnalysisStatus { get; set; } = PortfolioAnalysisStatuses.NotAnalyzed;
+
+    /// <summary>UTC timestamp of the most recent successful analysis run (i.e. the last time
+    /// <see cref="AnalysisStatus"/> was flipped to <see cref="PortfolioAnalysisStatuses.Analyzed"/>).
+    /// Null for items that have never been analyzed or are still in <c>NotAnalyzed</c> /
+    /// <c>Analyzing</c> / <c>Failed</c> / <c>Unsupported</c>. The portfolio list page sorts
+    /// by this descending (after <see cref="CreatedAt"/>) when present.</summary>
+    public DateTimeOffset? LastAnalyzedAt { get; set; }
 }

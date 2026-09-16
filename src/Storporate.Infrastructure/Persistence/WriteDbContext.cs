@@ -54,6 +54,13 @@ public sealed class WriteDbContext : DbContext
     // with no per-entity extra work.
     public DbSet<PortfolioItem> PortfolioItems => Set<PortfolioItem>();
 
+    // STOR-38 Phase 1: AI-derived per-skill findings written by the Phase 2 background
+    // worker and read by the Phase 3 per-item analysis endpoint. Implements IAccountScoped
+    // (and so inherits the same global query filter as PortfolioItem above) — the Phase 2
+    // worker copies the parent item's AccountId onto every finding it inserts so the
+    // filter resolves against the same indexed column.
+    public DbSet<PortfolioSkillFinding> PortfolioSkillFindings => Set<PortfolioSkillFinding>();
+
     // STOR-63 Phase 1: tamper-evident audit log. Rows are written via raw Npgsql by
     // AuditLogWriter (not via this DbContext's change tracker), but reads through the
     // Administrator query endpoint in Phase 3 use this DbSet for AsNoTracking LINQ queries.
@@ -70,6 +77,7 @@ public sealed class WriteDbContext : DbContext
         modelBuilder.ApplyConfiguration(new SessionConfiguration());
         modelBuilder.ApplyConfiguration(new JobConfiguration());
         modelBuilder.ApplyConfiguration(new PortfolioItemConfiguration());
+        modelBuilder.ApplyConfiguration(new PortfolioSkillFindingConfiguration());
         modelBuilder.ApplyConfiguration(new AuditLogEntryConfiguration());
 
         // Global query filter for every IAccountScoped entity type. We walk the model

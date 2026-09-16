@@ -92,7 +92,52 @@ public class ListPortfolioItemsHandlerTests
             ListPortfolioItemsHandler.ExecuteAsync(request, dbContext, CancellationToken.None));
     }
 
-    private static PortfolioItem SeedPortfolioItem(WriteDbContext dbContext, Guid accountId, string label)
+    [Fact]
+    public async Task ExecuteAsync_ReturnsAnalysisStatusAndLastAnalyzedAt_OnEachRow()
+    {
+        // STOR-38 Phase 3 addendum: the list endpoint now carries the per-item
+        // analysis state on every row so the Phase 5 portfolio page can render
+        // its status badge without an extra API call per row. Seed two items
+        // with different AnalysisStatus values and verify they round-trip into
+        // the response unchanged.
+        var callerAccountId = Guid.NewGuid();
+        var (dbContext, _) = CreateDbContext(callerAccountId);
+
+        var analyzedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        SeedPortfolioItem(
+            dbContext,
+            callerAccountId,
+            "Analyzed item",
+            analysisStatus: PortfolioAnalysisStatuses.Analyzed,
+            lastAnalyzedAt: analyzedAt);
+        SeedPortfolioItem(
+            dbContext,
+            callerAccountId,
+            "Pending item",
+            analysisStatus: PortfolioAnalysisStatuses.NotAnalyzed,
+            lastAnalyzedAt: null);
+
+        var request = new ListPortfolioItemsRequest { PageSize = 50 };
+
+        var page = await ListPortfolioItemsHandler.ExecuteAsync(request, dbContext, CancellationToken.None);
+
+        Assert.Equal(2, page.Items.Count);
+
+        var analyzedItem = Assert.Single(page.Items, i => i.Label == "Analyzed item");
+        Assert.Equal(PortfolioAnalysisStatuses.Analyzed, analyzedItem.AnalysisStatus);
+        Assert.Equal(analyzedAt, analyzedItem.LastAnalyzedAt);
+
+        var pendingItem = Assert.Single(page.Items, i => i.Label == "Pending item");
+        Assert.Equal(PortfolioAnalysisStatuses.NotAnalyzed, pendingItem.AnalysisStatus);
+        Assert.Null(pendingItem.LastAnalyzedAt);
+    }
+
+    private static PortfolioItem SeedPortfolioItem(
+        WriteDbContext dbContext,
+        Guid accountId,
+        string label,
+        string analysisStatus = PortfolioAnalysisStatuses.NotAnalyzed,
+        DateTimeOffset? lastAnalyzedAt = null)
     {
         var item = new PortfolioItem
         {
@@ -103,6 +148,8 @@ public class ListPortfolioItemsHandlerTests
             SubmissionType = PortfolioSubmissionTypes.Link,
             ExternalUrl = "https://example.com/x",
             CreatedAt = DateTimeOffset.UtcNow,
+            AnalysisStatus = analysisStatus,
+            LastAnalyzedAt = lastAnalyzedAt,
         };
         dbContext.PortfolioItems.Add(item);
         dbContext.SaveChanges();

@@ -5,6 +5,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Storporate.Api.Errors;
 using Storporate.Modules.Identity.Exceptions;
+using Storporate.Modules.Portfolio;
+using Storporate.SharedKernel.Entities;
 
 namespace Storporate.Tests.Unit.Errors;
 
@@ -80,6 +82,18 @@ public class GlobalExceptionHandlerTests
         yield return
         [
             new GoogleEmailNotVerifiedException(), StatusCodes.Status409Conflict, "google_email_not_verified",
+        ];
+        yield return
+        [
+            new PortfolioAnalysisNotRetryableException(PortfolioAnalysisStatuses.Analyzed),
+            StatusCodes.Status409Conflict,
+            "portfolio_analysis_not_retryable",
+        ];
+        yield return
+        [
+            new PortfolioAnalysisNotRetryableException(PortfolioAnalysisStatuses.Analyzing),
+            StatusCodes.Status409Conflict,
+            "portfolio_analysis_not_retryable",
         ];
     }
 

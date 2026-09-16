@@ -1,5 +1,7 @@
+using System.Text.Json;
 using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
+using Storporate.Modules.Portfolio.Analysis;
 using Storporate.SharedKernel.Entities;
 using Storporate.SharedKernel.Storage;
 
@@ -118,6 +120,31 @@ public static class CreatePortfolioItemHandler
         };
 
         dbContext.PortfolioItems.Add(portfolioItem);
+
+        // STOR-38 Phase 2: every accepted submission immediately enqueues an analysis
+        // job for the STOR-38 worker. The job's AccountId mirrors the portfolio item's
+        // so the worker's row-claim query (filtered by AccountId via the global query
+        // filter + by Type) sees the row under the same tenancy gate as the item itself.
+        // Both writes commit in one SaveChanges call so a half-committed state (item
+        // without its analysis job, or vice versa) is impossible — a transient failure
+        // on the second call would previously leave an orphaned NotAnalyzed item that
+        // no retry path could rescue (retry only works from Failed). portfolioItem.Id
+        // is set eagerly above so the job's PayloadJson can reference it independently
+        // of save-call ordering.
+        var analysisJob = new Job
+        {
+            Id = Guid.NewGuid(),
+            Type = PortfolioJobTypes.AnalyzePortfolioItem,
+            Status = JobStatus.Pending,
+            AttemptCount = 0,
+            PayloadJson = JsonSerializer.Serialize(
+                new AnalyzePortfolioItemPayload(portfolioItem.Id)),
+            AccountId = accountId,
+            CreatedAt = now.UtcDateTime,
+            UpdatedAt = now.UtcDateTime,
+        };
+        dbContext.Jobs.Add(analysisJob);
+
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
         return CreatePortfolioItemResponse.FromEntity(portfolioItem);

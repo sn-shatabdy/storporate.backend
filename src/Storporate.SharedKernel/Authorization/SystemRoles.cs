@@ -98,6 +98,7 @@ public static class SystemRoles
             Permissions.Portfolio.Create,
             Permissions.Portfolio.Read,
             Permissions.Portfolio.Delete,
+            Permissions.Portfolio.Retry,
         };
         var administrator = new HashSet<string>(Permissions.All, StringComparer.Ordinal);
 

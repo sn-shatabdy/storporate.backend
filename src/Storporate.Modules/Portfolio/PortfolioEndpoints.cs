@@ -136,5 +136,64 @@ public static class PortfolioEndpoints
                     : Results.NotFound();
             })
             .RequirePermission(Permissions.Portfolio.Delete);
+
+        // STOR-38 Phase 3: read the per-item AI analysis state for the Phase 5
+        // evidence detail page. Tenant-isolated via the global query filter — a
+        // cross-account id returns null and the endpoint maps that to a 404.
+        // Returns 200 with a `skills` array (empty, never null) for the
+        // NotAnalyzed/Analyzing/Failed/Unsupported terminal cases, and a populated
+        // `skills` array for Analyzed. `errorMessage` is populated only when the
+        // item is in Failed.
+        app.MapGet("/api/portfolio/items/{id:guid}/analysis", async (
+                Guid id,
+                WriteDbContext dbContext,
+                CancellationToken cancellationToken) =>
+            {
+                var readModel = await GetPortfolioItemAnalysisHandler.ExecuteAsync(
+                    id,
+                    dbContext,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (readModel is null)
+                {
+                    return Results.NotFound();
+                }
+
+                var response = new GetPortfolioItemAnalysisResponse(
+                    Status: readModel.Status,
+                    LastAnalyzedAt: readModel.LastAnalyzedAt,
+                    ErrorMessage: readModel.ErrorMessage,
+                    Skills: readModel.Skills);
+                return Results.Ok(response);
+            })
+            .RequirePermission(Permissions.Portfolio.Read);
+
+        // STOR-38 Phase 3: re-queue an analysis job for a Failed item. Returns
+        // 202 on success, 404 for cross-account / unknown id, 409 when the item
+        // is in any other status (the PortfolioAnalysisNotRetryableException
+        // maps to 409 via GlobalExceptionHandler — same pattern Identity's
+        // EmailAlreadyRegisteredException already establishes).
+        app.MapPost("/api/portfolio/items/{id:guid}/analysis/retry", async (
+                Guid id,
+                WriteDbContext dbContext,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                var outcome = await RetryPortfolioItemAnalysisHandler.ExecuteAsync(
+                    id,
+                    dbContext,
+                    timeProvider,
+                    cancellationToken).ConfigureAwait(false);
+
+                return outcome.Enqueued
+                    ? Results.Accepted(
+                        value: new
+                        {
+                            portfolioItemId = outcome.PortfolioItemId,
+                            newJobId = outcome.NewJobId,
+                        })
+                    : Results.NotFound();
+            })
+            .RequirePermission(Permissions.Portfolio.Retry);
     }
 }

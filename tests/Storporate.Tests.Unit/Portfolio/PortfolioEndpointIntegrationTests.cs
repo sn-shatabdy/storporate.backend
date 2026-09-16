@@ -176,6 +176,59 @@ public class PortfolioEndpointIntegrationTests : IClassFixture<AuthEndpointsFact
     }
 
     [Fact]
+    public async Task GetPortfolioItems_CarriesAnalysisStatusAndLastAnalyzedAt_OnEveryRow()
+    {
+        // STOR-38 Phase 3 addendum: the list endpoint surfaces the per-item
+        // analysis state on every row so the Phase 5 portfolio page can render
+        // its status badge without an extra API call per row. This test
+        // verifies both that the fields round-trip from the entity to the JSON
+        // body and that the wire-casing is camelCase (`analysisStatus` /
+        // `lastAnalyzedAt`) — the same convention the rest of the API uses
+        // (the GlobalExceptionHandler's `errorCode`/`message` is the precedent).
+        var user = await SeedStudentUserAsync();
+        var analyzedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var tokens = await IssueTokensAsync(user);
+
+        // Seed an Analyzed item directly via the test factory's DbContext so we
+        // can assert a non-default state on the wire.
+        using (var seedScope = _factory.Services.CreateScope())
+        {
+            var accountContext = seedScope.ServiceProvider.GetRequiredService<IAccountContextWriter>();
+            accountContext.SetUserId(user.Id);
+            accountContext.SetAccountId(user.Id);
+            accountContext.SetIsAdministrator(false);
+            var seedContext = seedScope.ServiceProvider.GetRequiredService<WriteDbContext>();
+            seedContext.PortfolioItems.Add(new PortfolioItem
+            {
+                Id = Guid.NewGuid(),
+                AccountId = user.Id,
+                Label = "Analyzed doc",
+                Category = PortfolioCategories.Document,
+                SubmissionType = PortfolioSubmissionTypes.Link,
+                ExternalUrl = "https://example.com/x",
+                CreatedAt = DateTimeOffset.UtcNow,
+                AnalysisStatus = PortfolioAnalysisStatuses.Analyzed,
+                LastAnalyzedAt = analyzedAt,
+            });
+            await seedContext.SaveChangesAsync();
+        }
+
+        using var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+
+        var response = await client.GetAsync("/api/portfolio/items");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        var json = JsonDocument.Parse(body);
+        var firstRow = json.RootElement.GetProperty("items")[0];
+
+        // Wire casing: camelCase, matching the rest of the API.
+        Assert.Equal(PortfolioAnalysisStatuses.Analyzed, firstRow.GetProperty("analysisStatus").GetString());
+        Assert.Equal(analyzedAt.ToString("o"), firstRow.GetProperty("lastAnalyzedAt").GetDateTimeOffset().ToString("o"));
+    }
+
+    [Fact]
     public async Task GetPortfolioItems_WithoutBearerToken_Returns401()
     {
         using var client = _factory.CreateClient();

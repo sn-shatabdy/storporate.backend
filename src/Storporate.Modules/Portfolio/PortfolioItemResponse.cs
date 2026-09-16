@@ -9,7 +9,9 @@ namespace Storporate.Modules.Portfolio;
 /// one-for-one <em>except</em> for <see cref="PortfolioItem.StorageKey"/>, which never
 /// leaves the server-side boundary — the storage key is an implementation detail of the
 /// <c>IArtifactStore</c> contract, not something a student-facing UI needs to display
-/// or pass back.
+/// or pass back. STOR-38 Phase 3 addendum: also exposes the per-item
+/// <see cref="AnalysisStatus"/> and <see cref="LastAnalyzedAt"/> so the Phase 5 portfolio
+/// list page can render its status badge without a per-row API call.
 /// </summary>
 /// <remarks>
 /// Same rationale as <c>AuditLogEntryResponse</c> omitting the chain-hash fields:
@@ -29,4 +31,6 @@ public sealed record PortfolioItemResponse(
     long? FileSizeBytes,
     string? ExternalUrl,
     string? Description,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    string AnalysisStatus,
+    DateTimeOffset? LastAnalyzedAt);
