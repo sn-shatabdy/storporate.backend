@@ -17,7 +17,13 @@ public sealed class SmtpOptions
     [Required]
     public string Host { get; init; } = string.Empty;
 
-    [Required]
+    /// <summary>
+    /// TCP port for the SMTP server. <c>[Range(1, 65535)]</c> matches the project's convention
+    /// for int config values (see <c>OtpRateLimitOptions</c>'s analogous knobs) and rules out a
+    /// missing/empty <c>Smtp__Port</c> binding to <c>0</c>, which would otherwise fail deep in
+    /// MailKit with a confusing error instead of failing fast at startup.
+    /// </summary>
+    [Range(1, 65535)]
     public int Port { get; init; }
 
     [Required]
