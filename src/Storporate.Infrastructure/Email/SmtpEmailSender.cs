@@ -48,12 +48,12 @@ public sealed class SmtpEmailSender(
         // to log unconditionally (matches the plan's design decision).
         logger.LogInformation("OTP code for {Email}: {Code}", toEmail, code);
 
-        var (html, text) = OtpEmailTemplateBuilder.Build(code);
+        var (subject, html, text) = OtpEmailTemplateBuilder.Build(code);
 
         var message = new MimeMessage();
         message.From.Add(new MailboxAddress(smtpOptions.FromName, smtpOptions.FromEmail));
         message.To.Add(MailboxAddress.Parse(toEmail));
-        message.Subject = OtpEmailTemplateBuilder.Subject;
+        message.Subject = subject;
         message.Body = new BodyBuilder
         {
             HtmlBody = html,

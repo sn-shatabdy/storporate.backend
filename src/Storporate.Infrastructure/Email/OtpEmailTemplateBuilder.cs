@@ -3,7 +3,7 @@ using System.Text;
 namespace Storporate.Infrastructure.Email;
 
 /// <summary>
-/// Produces the (HTML, plain-text) bodies for the OTP email used by every
+/// Produces the subject, HTML body, and plain-text body for the OTP email used by every
 /// <see cref="Storporate.SharedKernel.Abstractions.IEmailSender"/> implementation
 /// (Resend, SMTP, and any future provider).
 ///
@@ -31,10 +31,15 @@ public static class OtpEmailTemplateBuilder
     /// implementation. Centralized here so the body's copy and the line that names the email in
     /// a recipient's inbox never drift apart.
     /// </summary>
-    public const string Subject = "Your Storporate verification code";
+    private const string Subject = "Your Storporate verification code";
 
-    /// <summary>Builds the subject, HTML body, and plain-text body for an OTP email carrying <paramref name="code"/>.</summary>
-    public static (string Html, string Text) Build(string code)
+    /// <summary>
+    /// Build the subject, HTML body, and plain-text body for an OTP email carrying
+    /// <paramref name="code"/> in one call. Returning all three together (rather than just the
+    /// bodies) keeps the body copy and the inbox subject line coupled at every call site — a
+    /// sender that forgets the subject can't accidentally end up with one.
+    /// </summary>
+    public static (string Subject, string Html, string Text) Build(string code)
     {
         ArgumentException.ThrowIfNullOrEmpty(code);
 
@@ -47,7 +52,7 @@ public static class OtpEmailTemplateBuilder
 
         var html = BuildHtml(code);
 
-        return (html, text);
+        return (Subject, html, text);
     }
 
     private static string BuildHtml(string code)

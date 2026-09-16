@@ -36,13 +36,13 @@ public sealed class ResendEmailSender(
         }
 
         var resendOptions = options.Value;
-        var (html, text) = OtpEmailTemplateBuilder.Build(code);
+        var (subject, html, text) = OtpEmailTemplateBuilder.Build(code);
 
         var message = new EmailMessage
         {
             From = new EmailAddress { Email = resendOptions.FromEmail, DisplayName = resendOptions.FromName },
             To = toEmail,
-            Subject = OtpEmailTemplateBuilder.Subject,
+            Subject = subject,
             HtmlBody = html,
             TextBody = text,
         };
