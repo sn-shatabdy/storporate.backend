@@ -43,8 +43,10 @@ public interface IAccountContext
     /// <summary>The workspace this call is being made in. Equal to <see cref="UserId"/> for the
     /// four self-service actor types (workspace = account, per the STOR-62 plan, Context &amp;
     /// Findings); resolved from an <c>{accountId}</c> route value when an endpoint acts on
-    /// another account's behalf. Null for self-service endpoints that don't bind
-    /// <c>{accountId}</c> — they implicitly operate in the caller's own workspace.</summary>
+    /// another account's behalf. Always populated for authenticated requests —
+    /// <see cref="AccountContextMiddleware"/> falls back to <see cref="UserId"/> when no
+    /// <c>{accountId}</c> route value is bound, so self-service endpoints can rely on this
+    /// being non-null alongside the <c>RowLevelSecurityInterceptor</c>'s same-id check.</summary>
     Guid? AccountId { get; }
 
     /// <summary>True iff the authenticated caller's <see cref="SharedKernel.Entities.User.ActorType"/>

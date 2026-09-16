@@ -37,10 +37,9 @@ namespace Storporate.Infrastructure.Authorization;
 /// <see cref="IAccountContext.AccountId"/> is read from the matched route's
 /// <c>{accountId}</c> route value, when one is present. Endpoints that don't bind
 /// <c>{accountId}</c> — every self-service endpoint that operates on the caller's own
-/// data — leave <see cref="IAccountContext.AccountId"/> as <see langword="null"/>, which the
-/// downstream layers treat as "implicitly the caller's own account" (the same-id check in
-/// the global query filter / RLS policy resolves this against <see cref="IAccountContext.UserId"/>
-/// when it runs).
+/// data — fall back to <see cref="IAccountContext.UserId"/> so <see cref="IAccountContext.AccountId"/>
+/// is always populated for authenticated requests. The cross-account route value wins
+/// when both are present (admin endpoints that act on another account's behalf).
 /// </para>
 /// <para>
 /// <see cref="IAccountContext.IpAddress"/> and <see cref="IAccountContext.UserAgent"/> are
@@ -78,7 +77,18 @@ public static class AccountContextMiddleware
             if (context.GetRouteValue(AccountIdRouteParameterName) is string accountIdText
                 && Guid.TryParse(accountIdText, out var accountId))
             {
+                // Cross-account case: an endpoint bound {accountId} and that value
+                // explicitly wins over the JWT subject.
                 writer.SetAccountId(accountId);
+            }
+            else if (Guid.TryParse(subClaim, out var fallbackUserId))
+            {
+                // Self-service case: workspace == account per the STOR-62 plan's
+                // Context & Findings rule. Without this fallback the downstream
+                // RowLevelSecurityInterceptor would throw on SaveChangesAsync
+                // because IAccountContext.AccountId is null even though
+                // IAccountContext.UserId is populated from the JWT.
+                writer.SetAccountId(fallbackUserId);
             }
 
             // RemoteIpAddress reflects the direct TCP peer (a reverse proxy's address,

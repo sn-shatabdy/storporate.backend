@@ -12,6 +12,13 @@ namespace Storporate.Api.Errors;
 /// otherwise — comes back as the same two-field <see cref="ErrorResponse"/> shape, so API
 /// consumers never have to branch on error format.
 /// </summary>
+/// <remarks>
+/// The 400 "file_too_large" arm fires when <see cref="System.IO.InvalidDataException"/> is
+/// raised by the multipart reader after the request body crosses
+/// <c>FormOptions.MultipartBodyLengthLimit</c>. The validator would catch the same case if
+/// the body were within the multipart limit, so mapping to the same error code keeps the
+/// client's contract uniform regardless of which limit fired first.
+/// </remarks>
 public sealed class GlobalExceptionHandler(
     ILogger<GlobalExceptionHandler> logger,
     IHostEnvironment environment) : IExceptionHandler
@@ -49,6 +56,16 @@ public sealed class GlobalExceptionHandler(
                 (StatusCodes.Status400BadRequest, new ErrorResponse("actor_type_required", actorTypeRequiredException.Message)),
             UnknownSortKeyException unknownSortKeyException =>
                 (StatusCodes.Status400BadRequest, new ErrorResponse("unknown_sort_key", unknownSortKeyException.Message)),
+            Storporate.Modules.Portfolio.UnknownSortKeyException portfolioUnknownSortKey =>
+                (StatusCodes.Status400BadRequest, new ErrorResponse("unknown_sort_key", portfolioUnknownSortKey.Message)),
+            // The multipart reader throws InvalidDataException once the request body
+            // crosses FormOptions.MultipartBodyLengthLimit — see Program.cs's
+            // Configure<FormOptions>. Map it to a clean 400 / file_too_large rather
+            // than a 500 so the client gets the same error code they'd get from the
+            // validator if the body had been inside the multipart limit.
+            InvalidDataException invalidDataException when
+                invalidDataException.Message.Contains("Multipart body length limit", StringComparison.OrdinalIgnoreCase) =>
+                (StatusCodes.Status400BadRequest, new ErrorResponse("file_too_large", invalidDataException.Message)),
             _ => (StatusCodes.Status500InternalServerError, MapUnhandledError(exception)),
         };
 

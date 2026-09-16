@@ -8,6 +8,8 @@ using Microsoft.Extensions.Hosting;
 using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Infrastructure.Persistence.Interceptors;
+using Storporate.SharedKernel.Storage;
+using Storporate.Tests.Unit.Fakes;
 
 namespace Storporate.Tests.Unit.Auth;
 
@@ -71,17 +73,26 @@ public sealed class AuthEndpointsFactory : WebApplicationFactory<Program>
             // STOR-62 Phase 4: WriteDbContext now requires IAccountContext. The factory
             // overload that resolves from the request scope wires the test-only
             // AmbientAccountContext (registered below) into every WriteDbContext the host
-            // builds. The interceptor itself is intentionally NOT registered here — the
-            // integration tests below exercise the JWT/permission/MVC pipeline, not the
-            // tenancy guard, and skipping the interceptor means the test can save data
-            // without going through UseAccountContext. Global query filter still applies
-            // (it's installed at OnModelCreating time), so any IAccountScoped query these
-            // tests might add would still be filtered — which is the right shape for an
-            // integration test of unrelated code paths.
+            // builds. The RowLevelSecurityInterceptor is registered so its
+            // SavingChanges[Async] hook fires (it no-ops on InMemory — no Npgsql
+            // connection type — for the GUC refresh path; it still enforces
+            // AccountScope on the change tracker). Global query filter still applies
+            // (it's installed at OnModelCreating time), so any IAccountScoped query
+            // these tests might add would still be filtered — which is the right shape
+            // for an integration test of unrelated code paths.
             services.AddDbContext<WriteDbContext>((sp, options) =>
                 options.UseInMemoryDatabase("AuthEndpointsFactory")
                     .AddInterceptors(sp.GetRequiredService<RowLevelSecurityInterceptor>()));
             services.AddScoped<RowLevelSecurityInterceptor>();
+
+            // Swap IArtifactStore for the in-memory fake so handler/endpoint tests can
+            // assert which keys were written or removed without hitting MinIO/S3.
+            // The MinIO/S3 client would otherwise try to construct itself against
+            // unreachable localhost endpoints. No test in this fixture cares about the
+            // real storage backend's behavior — they care about *whether* something was
+            // written, which the fake records verbatim.
+            services.RemoveAll<IArtifactStore>();
+            services.AddSingleton<IArtifactStore, FakeArtifactStore>();
         });
 
         builder.UseEnvironment(Environments.Development);

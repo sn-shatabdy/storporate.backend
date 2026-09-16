@@ -81,11 +81,23 @@ public static class SystemRoles
         //     opportunities, a University sponsoring one) widens its grant set then.
         //   - Administrator gets Permissions.All — full access across every account,
         //     enforced by the workspace-isolation bypass path (see ActorTypes remarks).
+        //   - STOR-37 Phase 1: Students are the only actors who use the Portfolio
+        //     surface, so the Student grant set is widened to include the full
+        //     Portfolio.* triple (Create + Read + Delete). University / Club /
+        //     Organization have no use for portfolio capture, so they keep their existing
+        //     Jobs.Read-only grant set unchanged.
         var readOnly = new HashSet<string>(StringComparer.Ordinal) { Permissions.Jobs.Read };
         var fullJobs = new HashSet<string>(StringComparer.Ordinal)
         {
             Permissions.Jobs.Read,
             Permissions.Jobs.Write,
+        };
+        var studentGrants = new HashSet<string>(StringComparer.Ordinal)
+        {
+            Permissions.Jobs.Read,
+            Permissions.Portfolio.Create,
+            Permissions.Portfolio.Read,
+            Permissions.Portfolio.Delete,
         };
         var administrator = new HashSet<string>(Permissions.All, StringComparer.Ordinal);
 
@@ -94,7 +106,7 @@ public static class SystemRoles
         // of silently producing a never-looked-up grant set.
         return new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
         {
-            [ActorTypes.Student] = readOnly,
+            [ActorTypes.Student] = studentGrants,
             [ActorTypes.Organization] = fullJobs,
             [ActorTypes.University] = readOnly,
             [ActorTypes.Club] = readOnly,

@@ -2,7 +2,9 @@ using System.Text;
 using System.Threading.RateLimiting;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
@@ -20,6 +22,7 @@ using Storporate.Infrastructure.Storage;
 using Storporate.Modules.Identity;
 using Storporate.Modules.PlatformFoundations;
 using Storporate.Modules.SecurityGovernance;
+using Storporate.Modules.Portfolio;
 using Storporate.Modules.PlatformFoundations.Diagnostics;
 using Storporate.SharedKernel.Abstractions;
 using Storporate.SharedKernel.Security;
@@ -38,6 +41,23 @@ builder.Services.AddCors(options =>
         policy.WithOrigins("http://localhost:3000")
             .AllowAnyMethod()
             .AllowAnyHeader());
+});
+
+// --- Kestrel + FormOptions: STOR-37 sets the upload envelope to 100 MB to match
+// CreatePortfolioItemValidator.MaxFileSizeBytes. Kestrel's MaxRequestBodySize AND
+// FormOptions.MultipartBodyLengthLimit must both be raised — see the
+// minimal-api-file-upload skill's "Two size limits" rule: configuring only one
+// leaves uploads failing with the other cap before the body is ever parsed. ---
+const long MaxPortfolioUploadBytes = 100L * 1024L * 1024L;
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = MaxPortfolioUploadBytes;
+});
+builder.Services.Configure<FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit = MaxPortfolioUploadBytes;
+    options.ValueLengthLimit = (int)MaxPortfolioUploadBytes;
+    options.MultipartHeadersLengthLimit = 16 * 1024;
 });
 
 // --- Options pattern: fail fast on missing/invalid configuration at startup, not later ---
@@ -127,6 +147,7 @@ builder.Services.AddDbContext<WriteDbContext>((serviceProvider, options) =>
 builder.Services.AddPlatformFoundationsHandlers();
 builder.Services.AddIdentityHandlers();
 builder.Services.AddSecurityGovernanceHandlers();
+builder.Services.AddPortfolioHandlers();
 
 // --- AI provider (Bionic-hosted local LLM, OpenAI-compatible) ---
 builder.Services.AddBionicLlmProvider();
@@ -267,6 +288,7 @@ app.UseAuthorization();
 
 app.MapIdentityEndpoints();
 app.MapAuditLogEndpoints();
+app.MapPortfolioEndpoints();
 
 // --- Temporary diagnostics endpoints (Phase 2: validation/exception-handler proof; Phase 3/4
 // add llm-ping/storage-ping alongside these) ---

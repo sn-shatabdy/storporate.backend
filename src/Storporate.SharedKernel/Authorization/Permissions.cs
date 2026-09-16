@@ -64,6 +64,38 @@ public static class Permissions
     }
 
     /// <summary>
+    /// Permissions governing the Portfolio module — student-facing capture,
+    /// list, and hard-delete of <see cref="Entities.PortfolioItem"/> rows. Adding
+    /// a constant here automatically grants it to
+    /// <see cref="SystemRoles.Administrator"/> through the reflection-built
+    /// <see cref="All"/> set; the explicit Student role grants are recorded in
+    /// <see cref="SystemRoles"/> because the Student flow is the first
+    /// non-Administrator-only use of the Portfolio surface.
+    /// </summary>
+    /// <remarks>
+    /// STOR-37 Phase 1: <see cref="Create"/> gates <c>POST /api/portfolio/items</c>,
+    /// <see cref="Read"/> gates <c>GET /api/portfolio/items</c>, and
+    /// <see cref="Delete"/> gates <c>DELETE /api/portfolio/items/{id}</c>.
+    /// The set is split per verb (rather than a single coarse "manage" permission) so a
+    /// future role narrowing — e.g. read-only parent / mentor personas viewing a student's
+    /// portfolio — can grant <see cref="Read"/> without granting write/delete powers.
+    /// </remarks>
+    public static class Portfolio
+    {
+        /// <summary>Create a new <see cref="Entities.PortfolioItem"/> under the caller's
+        /// account (file upload or external link).</summary>
+        public const string Create = "portfolio:create";
+
+        /// <summary>Read <see cref="Entities.PortfolioItem"/> rows owned by the caller's
+        /// account.</summary>
+        public const string Read = "portfolio:read";
+
+        /// <summary>Delete a <see cref="Entities.PortfolioItem"/> owned by the caller's
+        /// account (hard-delete: DB row and storage blob).</summary>
+        public const string Delete = "portfolio:delete";
+    }
+
+    /// <summary>
     /// Every permission literal defined across the nested classes above, deduped and
     /// ordinal-sorted. Built once via reflection at class-initialization time so adding a new
     /// nested class / const is automatically reflected here without a hand-edited list.

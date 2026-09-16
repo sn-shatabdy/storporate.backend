@@ -48,6 +48,12 @@ public sealed class WriteDbContext : DbContext
 
     public DbSet<Session> Sessions => Set<Session>();
 
+    // STOR-37 Phase 1: student-facing portfolio capture. Implements IAccountScoped, so
+    // the global query filter installed below scopes every read to the caller's account
+    // automatically; STOR-62's three-layer isolation pipeline covers PortfolioItem rows
+    // with no per-entity extra work.
+    public DbSet<PortfolioItem> PortfolioItems => Set<PortfolioItem>();
+
     // STOR-63 Phase 1: tamper-evident audit log. Rows are written via raw Npgsql by
     // AuditLogWriter (not via this DbContext's change tracker), but reads through the
     // Administrator query endpoint in Phase 3 use this DbSet for AsNoTracking LINQ queries.
@@ -63,6 +69,7 @@ public sealed class WriteDbContext : DbContext
         modelBuilder.ApplyConfiguration(new OtpCodeConfiguration());
         modelBuilder.ApplyConfiguration(new SessionConfiguration());
         modelBuilder.ApplyConfiguration(new JobConfiguration());
+        modelBuilder.ApplyConfiguration(new PortfolioItemConfiguration());
         modelBuilder.ApplyConfiguration(new AuditLogEntryConfiguration());
 
         // Global query filter for every IAccountScoped entity type. We walk the model

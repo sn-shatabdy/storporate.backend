@@ -18,7 +18,7 @@ public class ModuleIsolationTests
 
     public static readonly string[] ModuleNames =
     [
-        "EvidenceEngine",
+        "Portfolio",
         "TrustIntegrityNetwork",
         "StudentGrowthExperience",
         "VerifiableCredentialsDataRights",
