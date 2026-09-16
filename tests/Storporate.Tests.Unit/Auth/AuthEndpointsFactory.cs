@@ -41,6 +41,16 @@ public sealed class AuthEndpointsFactory : WebApplicationFactory<Program>
                 ["Encryption:FieldEncryptionKey"] = "CC40PEtQJ3kOFRSJA0Hz40p4pgahPMvxLdvoFIDPyno=",
                 ["Resend:ApiKey"] = "re_test_placeholder",
                 ["Resend:FromEmail"] = "test@example.com",
+                // STOR-64 Phase 1: SmtpOptions is bound unconditionally at startup (see Program.cs),
+                // so the test host's ValidateOnStart needs placeholder values here too — regardless
+                // of which provider Email:Provider actually selects. Default to Resend for tests
+                // since that's what the production test factory was already wired for.
+                ["Email:Provider"] = "Resend",
+                ["Smtp:Host"] = "smtp.test.invalid",
+                ["Smtp:Port"] = "587",
+                ["Smtp:Username"] = "test-smtp-user",
+                ["Smtp:Password"] = "test-smtp-password",
+                ["Smtp:FromEmail"] = "test@example.com",
                 ["Jwt:SigningKey"] = "yyl1HDUbAGIf15wifGiNzsASBlF0YH+QiwPSxwHEp0Nl9bLoT3ZXtdMBuZzR6AEe",
                 ["Jwt:Issuer"] = "storporate-api",
                 ["Jwt:Audience"] = "storporate-clients",
