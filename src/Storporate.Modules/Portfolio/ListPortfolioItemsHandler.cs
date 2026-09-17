@@ -101,7 +101,9 @@ public static class ListPortfolioItemsHandler
         // StorageKey never leaves the DB, mirroring AuditLogEntryResponse omitting
         // Hash / PreviousHash. The student-facing UI does not need the key — only
         // the server-side delete handler reaches into IArtifactStore.
-        var items = await ordered
+        // Skills is filled in below via a single bulk query (STOR-39 Phase 1) —
+        // we materialize the page first to know which PortfolioItemIds to filter on.
+        var pagedItems = await ordered
             .Select(item => new PortfolioItemResponse(
                 item.Id,
                 item.Label,
@@ -115,14 +117,56 @@ public static class ListPortfolioItemsHandler
                 item.Description,
                 item.CreatedAt,
                 item.AnalysisStatus,
-                item.LastAnalyzedAt))
+                item.LastAnalyzedAt,
+                Skills: Array.Empty<PortfolioSkillPreview>()))
             .Skip(spec.Skip)
             .Take(spec.PageSize)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
+        // STOR-39 Phase 1: the timeline view needs each item's AI-derived skill
+        // findings inline (skill name + confidence-band color), without an extra
+        // request per row. We resolve that with a SINGLE bulk query against the
+        // page's PortfolioItemIds, then group in memory and patch each response.
+        // This is the same shape GetPortfolioItemAnalysisHandler uses for the
+        // single-item endpoint, just scoped to a page's worth of ids rather than
+        // one. Tenant isolation is automatic via the global query filter on
+        // PortfolioSkillFinding — no manual AccountId predicate (same reasoning
+        // as the existing list query above).
+        if (pagedItems.Count > 0)
+        {
+            var pageItemIds = pagedItems.Select(i => i.Id).ToList();
+
+            var pageFindings = await dbContext.PortfolioSkillFindings
+                .AsNoTracking()
+                .Where(finding => pageItemIds.Contains(finding.PortfolioItemId))
+                .OrderBy(finding => finding.CreatedAt)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            var findingsByItemId = pageFindings
+                .GroupBy(finding => finding.PortfolioItemId)
+                .ToDictionary(
+                    group => group.Key,
+                    group => (IReadOnlyList<PortfolioSkillPreview>)group
+                        .Select(finding => new PortfolioSkillPreview(
+                            SkillName: finding.SkillName,
+                            ConfidenceBand: finding.ConfidenceBand))
+                        .ToArray());
+
+            for (var index = 0; index < pagedItems.Count; index++)
+            {
+                pagedItems[index] = pagedItems[index] with
+                {
+                    Skills = findingsByItemId.TryGetValue(pagedItems[index].Id, out var skills)
+                        ? skills
+                        : Array.Empty<PortfolioSkillPreview>(),
+                };
+            }
+        }
+
         return new PagedResult<PortfolioItemResponse>(
-            Items: items,
+            Items: pagedItems,
             PageNumber: spec.PageNumber,
             PageSize: spec.PageSize,
             TotalCount: totalCount);

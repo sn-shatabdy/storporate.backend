@@ -33,4 +33,33 @@ public sealed record PortfolioItemResponse(
     string? Description,
     DateTimeOffset CreatedAt,
     string AnalysisStatus,
-    DateTimeOffset? LastAnalyzedAt);
+    DateTimeOffset? LastAnalyzedAt,
+    IReadOnlyList<PortfolioSkillPreview> Skills);
+
+/// <summary>
+/// Condensed one-line preview of a single AI-derived skill finding for the timeline
+/// view on <c>/dashboard/portfolio</c>: the skill name and the
+/// <see cref="Storporate.SharedKernel.Entities.ConfidenceBands"/> value the STOR-38
+/// worker assigned. Mirrors the per-finding
+/// <see cref="PortfolioSkillFindingResponse"/> on the detail page minus the
+/// <c>Explanation</c> field — the timeline badge carries only what the UI needs to
+/// label + color a chip, and the full evidence-grounded justification stays
+/// scoped to the detail endpoint where the student audits the model's reasoning.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Why a sibling record rather than reusing <see cref="PortfolioSkillFindingResponse"/>.</b>
+/// The detail-page response is the full evidence record; the timeline preview is the
+/// two-field condensation. Sharing a record would let future drift on either surface
+/// (a renamed explanation field, a new optional sub-score) silently leak onto the other.
+/// </para>
+/// <para>
+/// <b>Why co-located with <see cref="PortfolioItemResponse"/> rather than in its own file.</b>
+/// The other condensed response in this module
+/// (<see cref="PortfolioSkillFindingResponse"/>) is co-located with the response that
+/// uses it (<see cref="GetPortfolioItemAnalysisResponse"/>) — same one-DTO-per-file
+/// shape, just two records side-by-side in one file when one record is the
+/// component-of-another.
+/// </para>
+/// </remarks>
+public sealed record PortfolioSkillPreview(string SkillName, string ConfidenceBand);
