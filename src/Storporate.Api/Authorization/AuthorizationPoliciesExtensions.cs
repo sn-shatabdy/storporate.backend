@@ -60,6 +60,15 @@ public static class AuthorizationPoliciesExtensions
         services.TryAddSingleton<IAccountContextWriter>(sp => sp.GetRequiredService<AmbientAccountContext>());
         services.TryAddSingleton<IAccountContext>(sp => sp.GetRequiredService<AmbientAccountContext>());
 
+        // Background account scope: Singleton, sits next to AmbientAccountContext because
+        // it composes the same IAccountContextWriter + IAccountContext the middleware uses,
+        // and the AsyncLocal-backed storage on AmbientAccountContext outlives any DI scope.
+        // The polling worker (PortfolioAnalysisWorker) and any future background processors
+        // resolve this to bracket each tick with the right ambient account so the EF Core
+        // global query filter, the RowLevelSecurityInterceptor save-time guard, and the
+        // Postgres row-level-security policy all see a populated account.
+        services.TryAddSingleton<IBackgroundAccountScope, BackgroundAccountScope>();
+
         // The handler: registered as transient. The handler holds no per-request state of its
         // own, but it depends on IPermissionService (registered scoped by SecurityGovernance)
         // which a singleton handler would capture once at startup — so the validation engine

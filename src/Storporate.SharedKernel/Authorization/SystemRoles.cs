@@ -99,6 +99,21 @@ public static class SystemRoles
             Permissions.Portfolio.Read,
             Permissions.Portfolio.Delete,
             Permissions.Portfolio.Retry,
+            // STOR-40 Phase 1: the Student is the only actor type that uses the
+            // advisor and feed surfaces, so the Student grant set widens here.
+            // Advisor: full Create/Read/Update/Delete so the student can drive
+            // the conversation lifecycle end-to-end (open an Exploration,
+            // message, refresh, rename, delete, compare). Feed: Read so the
+            // student sees matched items + Update for the future
+            // "mark-as-read" / "dismiss" UI. Organization / University /
+            // Club are unchanged — the advisor pipeline is a student-only
+            // feature today.
+            Permissions.Advisor.Create,
+            Permissions.Advisor.Read,
+            Permissions.Advisor.Update,
+            Permissions.Advisor.Delete,
+            Permissions.Feed.Read,
+            Permissions.Feed.Update,
         };
         var administrator = new HashSet<string>(Permissions.All, StringComparer.Ordinal);
 

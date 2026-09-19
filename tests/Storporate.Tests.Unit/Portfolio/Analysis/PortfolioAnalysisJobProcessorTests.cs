@@ -48,7 +48,7 @@ public class PortfolioAnalysisJobProcessorTests
             ("Public Speaking", ConfidenceBands.Developing, "Mentions a class presentation but no transcript."),
             ("TypeScript", ConfidenceBands.Missing, "No TypeScript code or typescript evidence in the text.")));
 
-        var processor = CreateProcessor(dbContext, llmClient);
+        var (processor, _) = CreateProcessor(dbContext, llmClient);
         var outcome = await processor.TryProcessOneAsync(CancellationToken.None);
 
         Assert.Equal(BackgroundJobTickOutcome.Processed, outcome);
@@ -91,7 +91,7 @@ public class PortfolioAnalysisJobProcessorTests
         llmClient.EnqueueException(new LlmProviderException("provider unreachable 2"));
         llmClient.EnqueueException(new LlmProviderException("provider unreachable 3"));
 
-        var processor = CreateProcessor(dbContext, llmClient);
+        var (processor, _) = CreateProcessor(dbContext, llmClient);
 
         // Three ticks: the first two re-queue (Status = Pending, AttemptCount =
         // 1 and 2 respectively); the third exhausts the budget and flips to
@@ -131,7 +131,7 @@ public class PortfolioAnalysisJobProcessorTests
 
         var llmClient = new FakeLlmClient();
 
-        var processor = CreateProcessor(dbContext, llmClient);
+        var (processor, _) = CreateProcessor(dbContext, llmClient);
         var outcome = await processor.TryProcessOneAsync(CancellationToken.None);
 
         Assert.Equal(BackgroundJobTickOutcome.Processed, outcome);
@@ -163,7 +163,7 @@ public class PortfolioAnalysisJobProcessorTests
             ("Next.js", ConfidenceBands.Strong, "Next.js mentioned by name and used in the dashboard build."),
             ("GraphQL", ConfidenceBands.Strong, "GraphQL schema/query usage is named explicitly.")));
 
-        var processor = CreateProcessor(dbContext, llmClient);
+        var (processor, _) = CreateProcessor(dbContext, llmClient);
         await processor.TryProcessOneAsync(CancellationToken.None);
 
         var call = Assert.Single(llmClient.Calls);
@@ -222,10 +222,10 @@ public class PortfolioAnalysisJobProcessorTests
         var llmClient2 = new FakeLlmClient();
         llmClient2.EnqueueResponse(SkillsJson(("Skill B", ConfidenceBands.Strong, "explanation B")));
 
-        var processor1 = CreateProcessor(
+        var (processor1, _) = CreateProcessor(
             CreateDbContextOnSharedRoot(databaseName, sharedRoot, accountId),
             llmClient1);
-        var processor2 = CreateProcessor(
+        var (processor2, _) = CreateProcessor(
             CreateDbContextOnSharedRoot(databaseName, sharedRoot, accountId),
             llmClient2);
 
@@ -269,17 +269,16 @@ public class PortfolioAnalysisJobProcessorTests
     /// <summary>Builds a processor wired to the given context + LLM fake. The
     /// extractor is a real instance pointed at the same <see cref="FakeArtifactStore"/>
     /// we use elsewhere — its evidence paths are well-understood so the test
-    /// can exercise either branch (link / file / unsupported).</summary>
-    private static PortfolioAnalysisJobProcessor CreateProcessor(WriteDbContext dbContext, ILlmClient llmClient)
+    /// can exercise either branch (link / file / unsupported). The ambient
+    /// account context is the real <see cref="AmbientAccountContext"/> so the
+    /// processor's new scope bracket (claim under system, work under account)
+    /// is exercised end-to-end; a hand-built fake would silently swallow the
+    /// same bug STOR-40 reproduces on production Postgres.</summary>
+    private static (PortfolioAnalysisJobProcessor Processor, AmbientAccountContext Account) CreateProcessor(
+        WriteDbContext dbContext,
+        ILlmClient llmClient)
     {
-        var artifactStore = new FakeArtifactStore();
-        var extractor = new EvidenceContentExtractor(artifactStore, NullLogger<EvidenceContentExtractor>.Instance);
-        return new PortfolioAnalysisJobProcessor(
-            dbContext,
-            llmClient,
-            extractor,
-            NullLogger<PortfolioAnalysisJobProcessor>.Instance,
-            TimeProvider.System);
+        return CreateProcessorWithRealScope(dbContext, llmClient);
     }
 
     /// <summary>Seeds one <c>Pending</c> analysis job linked to a freshly-created
@@ -349,6 +348,32 @@ public class PortfolioAnalysisJobProcessorTests
             .AddInterceptors(interceptor)
             .Options;
         return new WriteDbContext(options, accountContext);
+    }
+
+    /// <summary>
+    /// Build a processor with the REAL <see cref="AmbientAccountContext"/> /
+    /// <see cref="BackgroundAccountScope"/> pair (rather than a hand-built
+    /// scoped reader). The processor is now expected to bracket its claim
+    /// with the scope itself, so any test that bypasses the scope will fail
+    /// the same way the production bug did — exactly the reason STOR-40
+    /// replaces the hand-built context the prior suite used.
+    /// </summary>
+    private static (PortfolioAnalysisJobProcessor Processor, AmbientAccountContext AccountContext) CreateProcessorWithRealScope(
+        WriteDbContext dbContext,
+        ILlmClient llmClient)
+    {
+        var artifactStore = new FakeArtifactStore();
+        var extractor = new EvidenceContentExtractor(artifactStore, NullLogger<EvidenceContentExtractor>.Instance);
+        var ambient = new AmbientAccountContext();
+        var scope = new BackgroundAccountScope(ambient, ambient);
+        var processor = new PortfolioAnalysisJobProcessor(
+            dbContext,
+            llmClient,
+            extractor,
+            NullLogger<PortfolioAnalysisJobProcessor>.Instance,
+            TimeProvider.System,
+            scope);
+        return (processor, ambient);
     }
 
     // Shared store name + root used by every seed / read in this suite. The

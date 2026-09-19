@@ -23,6 +23,7 @@ using Storporate.Modules.Identity;
 using Storporate.Modules.PlatformFoundations;
 using Storporate.Modules.SecurityGovernance;
 using Storporate.Modules.Portfolio;
+using Storporate.Modules.StudentGrowthExperience;
 using Storporate.Modules.PlatformFoundations.Diagnostics;
 using Storporate.Infrastructure.Jobs;
 using Storporate.SharedKernel.Abstractions;
@@ -133,6 +134,26 @@ builder.Services
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
+// STOR-40 Phase 1: BackgroundJobOptions (StaleJobReaper configuration). No
+// [Required] members — defaults apply — so test hosts that bind this section
+// with no value (PermissionCoverageTests' placeholder factory, AuthEndpointsFactory)
+// are unaffected. Matches the project rule established for the other options
+// classes: any future [Required] must also be added to those hosts.
+builder.Services
+    .AddOptions<BackgroundJobOptions>()
+    .Bind(builder.Configuration.GetSection(BackgroundJobOptions.SectionName))
+    .ValidateOnStart();
+
+// STOR-40 Phase 1: AdvisorOptions (prompt budgets, history window, output
+// token cap for the advisor / matching pipeline). No [Required] members —
+// every property has a sensible default (see AdvisorOptions remarks for the
+// measurement behind them). ValidateOnStart is still on so a malformed
+// override in appsettings is caught at startup.
+builder.Services
+    .AddOptions<AdvisorOptions>()
+    .Bind(builder.Configuration.GetSection(AdvisorOptions.SectionName))
+    .ValidateOnStart();
+
 // --- Persistence ---
 // STOR-62 Phase 4: register the RowLevelSecurityInterceptor in DI so EF Core's
 // AddDbContext<WriteDbContext> factory (below) can resolve it from the request scope
@@ -160,6 +181,7 @@ builder.Services.AddPlatformFoundationsHandlers();
 builder.Services.AddIdentityHandlers();
 builder.Services.AddSecurityGovernanceHandlers();
 builder.Services.AddPortfolioHandlers();
+builder.Services.AddStudentGrowthExperienceHandlers();
 
 // --- TimeProvider: STOR-38 Phase 2 background worker uses TimeProvider.GetUtcNow()
 // to stamp job StartedAt / UpdatedAt / CompletedAt without going through DateTimeOffset.UtcNow
@@ -204,6 +226,12 @@ builder.Services.AddArtifactStorage();
 // EvidenceContentExtractor) all live in the same DI graph the request pipeline already
 // uses, and AddPortfolioHandlers above has already wired the scoped ones. ---
 builder.Services.AddHostedService<PortfolioAnalysisWorker>();
+
+// STOR-40 Phase 1: StaleJobReaper runs once per worker tick inside the worker's fresh
+// DI scope. Scoped — same lifetime as WriteDbContext — so it sees the same change
+// tracker the worker would have used to claim its own job, and so the reaper's
+// SaveChanges rides on the same Npgsql connection the worker tick opened.
+builder.Services.AddScoped<StaleJobReaper>();
 
 // --- JWT access/refresh token issuance (STOR-61 Phase 2) ---
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();

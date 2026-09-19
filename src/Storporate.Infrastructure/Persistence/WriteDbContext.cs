@@ -66,6 +66,20 @@ public sealed class WriteDbContext : DbContext
     // Administrator query endpoint in Phase 3 use this DbSet for AsNoTracking LINQ queries.
     public DbSet<AuditLogEntry> AuditLogEntries => Set<AuditLogEntry>();
 
+    // STOR-40 Phase 1: student-growth advisor and feed (six tenant tables + one
+    // global table). Every IAccountScoped entity below is picked up by the global
+    // query filter installed in OnModelCreating and by the RLS policies added in
+    // the AddStudentGrowthRowLevelSecurity migration. The global FeedItems table
+    // is intentionally NOT IAccountScoped — it is read by every student and written
+    // only by the feed-refresh background service.
+    public DbSet<Exploration> Explorations => Set<Exploration>();
+    public DbSet<ExplorationMessage> ExplorationMessages => Set<ExplorationMessage>();
+    public DbSet<ExplorationSummaryVersion> ExplorationSummaryVersions => Set<ExplorationSummaryVersion>();
+    public DbSet<StudentContextNote> StudentContextNotes => Set<StudentContextNote>();
+    public DbSet<ExplorationComparison> ExplorationComparisons => Set<ExplorationComparison>();
+    public DbSet<StudentFeedEntry> StudentFeedEntries => Set<StudentFeedEntry>();
+    public DbSet<FeedItem> FeedItems => Set<FeedItem>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -79,6 +93,13 @@ public sealed class WriteDbContext : DbContext
         modelBuilder.ApplyConfiguration(new PortfolioItemConfiguration());
         modelBuilder.ApplyConfiguration(new PortfolioSkillFindingConfiguration());
         modelBuilder.ApplyConfiguration(new AuditLogEntryConfiguration());
+        modelBuilder.ApplyConfiguration(new ExplorationConfiguration());
+        modelBuilder.ApplyConfiguration(new ExplorationMessageConfiguration());
+        modelBuilder.ApplyConfiguration(new ExplorationSummaryVersionConfiguration());
+        modelBuilder.ApplyConfiguration(new StudentContextNoteConfiguration());
+        modelBuilder.ApplyConfiguration(new ExplorationComparisonConfiguration());
+        modelBuilder.ApplyConfiguration(new StudentFeedEntryConfiguration());
+        modelBuilder.ApplyConfiguration(new FeedItemConfiguration());
 
         // Global query filter for every IAccountScoped entity type. We walk the model
         // once via reflection to discover which CLR types implement IAccountScoped,
