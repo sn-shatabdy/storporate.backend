@@ -82,6 +82,7 @@ public static class GetPortfolioItemAnalysisHandler
             .AsNoTracking()
             .Where(finding => finding.PortfolioItemId == portfolioItemId)
             .OrderBy(finding => finding.CreatedAt)
+            .ThenBy(finding => finding.Id)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 

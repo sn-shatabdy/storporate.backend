@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Storporate.Infrastructure.Auditing;
 using Storporate.Infrastructure.Persistence;
@@ -50,6 +51,8 @@ public static class IdentityEndpoints
                 WriteDbContext dbContext,
                 IJwtTokenService tokenService,
                 IAuditLogWriter auditLogWriter,
+                IOptions<OtpOptions> otpOptions,
+                IHostEnvironment environment,
                 CancellationToken cancellationToken) =>
             {
                 await validator.ValidateAndThrowAsync(request, cancellationToken);
@@ -63,6 +66,8 @@ public static class IdentityEndpoints
                     dbContext,
                     tokenService,
                     auditLogWriter,
+                    otpOptions,
+                    environment,
                     cancellationToken);
 
                 return Results.Ok(new VerifyOtpResponse(

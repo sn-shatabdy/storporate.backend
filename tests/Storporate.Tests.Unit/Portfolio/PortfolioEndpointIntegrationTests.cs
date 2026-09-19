@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
@@ -236,6 +237,127 @@ public class PortfolioEndpointIntegrationTests : IClassFixture<AuthEndpointsFact
         var response = await client.GetAsync("/api/portfolio/items");
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetPortfolioItems_CarriesSkillsArrayPerItem_OnTheWire()
+    {
+        // STOR-39 Phase 1: the timeline view needs the per-item AI skill findings inline
+        // (skill name + confidence-band color) so it can render one chip per finding
+        // without an extra /analysis request per row. This end-to-end test seeds a mix
+        // — one analyzed item with two findings, one not-analyzed item with none —
+        // and asserts the wire response carries a `skills` array per item (populated
+        // for the analyzed item, empty-but-not-null for the not-analyzed item). It
+        // also captures the full JSON body to stdout so the wire shape is visible in
+        // the test log for the orchestrator's report.
+        var user = await SeedStudentUserAsync();
+        var analyzedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var tokens = await IssueTokensAsync(user);
+
+        Guid analyzedItemId;
+        Guid pendingItemId;
+        using (var seedScope = _factory.Services.CreateScope())
+        {
+            var accountContext = seedScope.ServiceProvider.GetRequiredService<IAccountContextWriter>();
+            accountContext.SetUserId(user.Id);
+            accountContext.SetAccountId(user.Id);
+            accountContext.SetIsAdministrator(false);
+            var seedContext = seedScope.ServiceProvider.GetRequiredService<WriteDbContext>();
+
+            var analyzedItem = new PortfolioItem
+            {
+                Id = Guid.NewGuid(),
+                AccountId = user.Id,
+                Label = "Analyzed doc",
+                Category = PortfolioCategories.Document,
+                SubmissionType = PortfolioSubmissionTypes.Link,
+                ExternalUrl = "https://example.com/x",
+                CreatedAt = DateTimeOffset.UtcNow,
+                AnalysisStatus = PortfolioAnalysisStatuses.Analyzed,
+                LastAnalyzedAt = analyzedAt,
+            };
+            analyzedItemId = analyzedItem.Id;
+            seedContext.PortfolioItems.Add(analyzedItem);
+
+            seedContext.PortfolioSkillFindings.Add(new PortfolioSkillFinding
+            {
+                Id = Guid.NewGuid(),
+                AccountId = user.Id,
+                PortfolioItemId = analyzedItem.Id,
+                SkillName = "React",
+                ConfidenceBand = ConfidenceBands.Strong,
+                Explanation = "Builds a component-based UI in the description.",
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-2),
+            });
+            seedContext.PortfolioSkillFindings.Add(new PortfolioSkillFinding
+            {
+                Id = Guid.NewGuid(),
+                AccountId = user.Id,
+                PortfolioItemId = analyzedItem.Id,
+                SkillName = "Public Speaking",
+                ConfidenceBand = ConfidenceBands.Developing,
+                Explanation = "Mentions a class presentation but no transcript.",
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+            });
+
+            var pendingItem = new PortfolioItem
+            {
+                Id = Guid.NewGuid(),
+                AccountId = user.Id,
+                Label = "Pending doc",
+                Category = PortfolioCategories.Document,
+                SubmissionType = PortfolioSubmissionTypes.Link,
+                ExternalUrl = "https://example.com/y",
+                CreatedAt = DateTimeOffset.UtcNow,
+                AnalysisStatus = PortfolioAnalysisStatuses.NotAnalyzed,
+                LastAnalyzedAt = null,
+            };
+            pendingItemId = pendingItem.Id;
+            seedContext.PortfolioItems.Add(pendingItem);
+
+            await seedContext.SaveChangesAsync();
+        }
+
+        using var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+
+        var response = await client.GetAsync("/api/portfolio/items");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+
+        // Print the full body to the test log so the orchestrator can paste the wire
+        // shape into its report — `Console.WriteLine` lands in xunit's standard output
+        // capture, which the dotnet test logger emits at normal verbosity.
+        Console.WriteLine($"GET /api/portfolio/items response body (STOR-39 wire shape): {body}");
+
+        var json = JsonDocument.Parse(body);
+        var items = json.RootElement.GetProperty("items");
+        Assert.Equal(2, items.GetArrayLength());
+
+        var analyzedRow = Assert.Single(items.EnumerateArray(), row => row.GetProperty("id").GetGuid() == analyzedItemId);
+        var pendingRow = Assert.Single(items.EnumerateArray(), row => row.GetProperty("id").GetGuid() == pendingItemId);
+
+        var analyzedSkills = analyzedRow.GetProperty("skills");
+        Assert.Equal(2, analyzedSkills.GetArrayLength());
+        Assert.Contains(analyzedSkills.EnumerateArray(), s =>
+            s.GetProperty("skillName").GetString() == "React"
+            && s.GetProperty("confidenceBand").GetString() == ConfidenceBands.Strong);
+        Assert.Contains(analyzedSkills.EnumerateArray(), s =>
+            s.GetProperty("skillName").GetString() == "Public Speaking"
+            && s.GetProperty("confidenceBand").GetString() == ConfidenceBands.Developing);
+
+        // Defensive: the condensed preview has no `explanation` field on the wire —
+        // the timeline must not leak the model's evidence-grounded justification.
+        foreach (var skill in analyzedSkills.EnumerateArray())
+        {
+            Assert.False(skill.TryGetProperty("explanation", out _),
+                $"Timeline skill preview should not carry an `explanation` field, but found one: {skill}");
+        }
+
+        var pendingSkills = pendingRow.GetProperty("skills");
+        Assert.Equal(JsonValueKind.Array, pendingSkills.ValueKind);
+        Assert.Equal(0, pendingSkills.GetArrayLength());
     }
 
     [Fact]

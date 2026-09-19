@@ -113,6 +113,8 @@ builder.Services
         $"{JwtOptions.SectionName}:{nameof(JwtOptions.SigningKey)} must be at least {JwtOptions.MinimumSigningKeyLengthBytes} bytes (UTF-8) for HMAC-SHA256 signing.")
     .ValidateOnStart();
 
+// Validates Otp:MasterCode shape at startup (needs IHostEnvironment, so it is a class, not an inline lambda).
+builder.Services.AddSingleton<IValidateOptions<OtpOptions>, OtpOptionsValidator>();
 builder.Services
     .AddOptions<OtpOptions>()
     .Bind(builder.Configuration.GetSection(OtpOptions.SectionName))

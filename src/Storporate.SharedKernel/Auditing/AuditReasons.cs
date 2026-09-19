@@ -23,4 +23,11 @@ public static class AuditReasons
 
     /// <summary>The presented OTP code did not match the hashed value on file.</summary>
     public const string OtpWrongCode = """{"reason":"wrong_code"}""";
+
+    /// <summary><c>/api/auth/otp/verify</c> in a Development environment accepted the configured
+    /// <c>Otp:MasterCode</c> and bypassed the normal lookup/expiry/attempt checks. The bypass still
+    /// also writes the normal <c>login_succeeded</c> row keyed to the resulting user — this row
+    /// is the marker that lets a future audit-log query distinguish a dev-bypass login from a
+    /// real-code login without re-walking OtpCode rows.</summary>
+    public const string OtpDevMasterCodeUsed = """{"reason":"dev_master_code"}""";
 }

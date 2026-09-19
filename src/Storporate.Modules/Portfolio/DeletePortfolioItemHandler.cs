@@ -25,6 +25,16 @@ namespace Storporate.Modules.Portfolio;
 /// the existing tenant-isolation pattern (see the plan's acceptance criteria).
 /// </para>
 /// <para>
+/// <b>Cascade-delete for child findings.</b> <see cref="PortfolioSkillFinding"/> is
+/// FK-linked to <see cref="PortfolioItem"/> with <see cref="DeleteBehavior.Restrict"/>;
+/// the worker is the path that wipes findings before the item itself can be hard-
+/// deleted. Loading the item's findings and <c>RemoveRange</c>-ing them in the same
+/// <c>SaveChangesAsync</c> call lets EF order child deletes before the parent —
+/// without widening the schema or relaxing the Restrict guard. The query is scoped
+/// by <see cref="PortfolioSkillFinding.PortfolioItemId"/> (not <see cref="PortfolioSkillFinding.AccountId"/>)
+/// so a sibling item's findings under the same account are not caught in the blast.
+/// </para>
+/// <para>
 /// <b>Order of operations: delete blob after row.</b> If the DB delete succeeds but
 /// the storage delete fails, the row is already gone — the orphan blob is cleaned
 /// up by a future story's GC sweep. If the storage delete runs first and the DB
@@ -69,6 +79,20 @@ public static class DeletePortfolioItemHandler
         var storageKey = item.StorageKey;
         var submissionType = item.SubmissionType;
         var label = item.Label;
+
+        // PortfolioSkillFindings FK is DeleteBehavior.Restrict — clear the item's findings
+        // inside this SaveChangesAsync so EF orders child deletes before the parent.
+        // Scoped by PortfolioItemId, not AccountId, so a sibling item's findings are
+        // untouched (verified by DeletePortfolioItemHandlerTests' sibling-isolation test).
+        // `ToListAsync` + `RemoveRange` instead of `ExecuteDeleteAsync` because the
+        // EF InMemory test provider does not implement ExecuteDelete — the production
+        // Postgres path would support either, but the InMemory path keeps unit-test
+        // coverage of the Restrict-FK ordering intact.
+        var findings = await dbContext.PortfolioSkillFindings
+            .Where(f => f.PortfolioItemId == portfolioItemId)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        dbContext.PortfolioSkillFindings.RemoveRange(findings);
 
         dbContext.PortfolioItems.Remove(item);
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
