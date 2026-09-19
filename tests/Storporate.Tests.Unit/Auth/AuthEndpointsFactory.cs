@@ -20,8 +20,19 @@ namespace Storporate.Tests.Unit.Auth;
 /// <see cref="WriteDbContext"/> registration for an in-memory EF provider, and disables the
 /// real Resend / LLM / S3-clients by overriding their config so they're never instantiated.
 /// </summary>
-public sealed class AuthEndpointsFactory : WebApplicationFactory<Program>
+public class AuthEndpointsFactory : WebApplicationFactory<Program>
 {
+    /// <summary>
+    /// Unique-per-instance database name so multiple <see cref="AuthEndpointsFactory"/>
+    /// instances — one per <see cref="IClassFixture{TFixture}"/> — don't
+    /// share the InMemory store. xUnit creates a fresh fixture per test
+    /// class, but the InMemory provider keys databases by name; a fixed
+    /// name would let the Advisor endpoint tests' pending <c>Job</c> rows
+    /// bleed into Portfolio / Identity integration tests that share this
+    /// factory (or its <see cref="AdvisorEndpointsFactory"/> subclass).
+    /// </summary>
+    private readonly string _databaseName = "AuthEndpointsFactory-" + Guid.NewGuid().ToString("N");
+
     protected override IHost CreateHost(IHostBuilder builder)
     {
         builder.ConfigureHostConfiguration(configurationBuilder =>
@@ -58,6 +69,23 @@ public sealed class AuthEndpointsFactory : WebApplicationFactory<Program>
                 ["Otp:ExpiryMinutes"] = "10",
                 ["Otp:MaxAttempts"] = "5",
                 ["GoogleAuth:ClientId"] = "test-google-client-id",
+                // STOR-40 Phase 2: AdvisorTurnJobProcessor / CompareExplorationsJobProcessor
+                // take AdvisorOptions directly via their constructor. The
+                // Program.cs options chain binds the "Advisor" section via
+                // AddOptions<AdvisorOptions>().Bind(...).ValidateOnStart();
+                // with every property carrying a sensible default, an
+                // explicit empty entry per key keeps the production
+                // values visible here even though no Advisor integration
+                // test exercises the real numbers.
+                ["Advisor:MaxUserPromptCharacters"] = "24000",
+                ["Advisor:MaxPortfolioItemCharacters"] = "4000",
+                ["Advisor:MaxFeedCandidateCharacters"] = "600",
+                ["Advisor:MaxFeedCandidates"] = "12",
+                ["Advisor:HistoryWindowTurns"] = "6",
+                ["Advisor:MaxHistoryEntryCharacters"] = "3000",
+                ["Advisor:MaxOutputTokens"] = "4096",
+                ["Advisor:HttpTimeout"] = "00:02:00",
+                ["Advisor:MaxExplorationsPerStudent"] = "20",
             });
         });
 
@@ -91,7 +119,7 @@ public sealed class AuthEndpointsFactory : WebApplicationFactory<Program>
             // these tests might add would still be filtered — which is the right shape
             // for an integration test of unrelated code paths.
             services.AddDbContext<WriteDbContext>((sp, options) =>
-                options.UseInMemoryDatabase("AuthEndpointsFactory")
+                options.UseInMemoryDatabase(_databaseName)
                     .AddInterceptors(sp.GetRequiredService<RowLevelSecurityInterceptor>()));
             services.AddScoped<RowLevelSecurityInterceptor>();
 

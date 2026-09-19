@@ -54,6 +54,14 @@ public sealed class GlobalExceptionHandler(
                 (StatusCodes.Status409Conflict, new ErrorResponse("google_email_not_verified", googleEmailNotVerifiedException.Message)),
             Storporate.Modules.Portfolio.PortfolioAnalysisNotRetryableException portfolioAnalysisNotRetryableException =>
                 (StatusCodes.Status409Conflict, new ErrorResponse("portfolio_analysis_not_retryable", portfolioAnalysisNotRetryableException.Message)),
+            Storporate.Modules.StudentGrowthExperience.Exceptions.ExplorationBusyException explorationBusyException =>
+                (StatusCodes.Status409Conflict, new ErrorResponse("exploration_busy", explorationBusyException.Message)),
+            Storporate.Modules.StudentGrowthExperience.Exceptions.ExplorationNotRetryableException explorationNotRetryableException =>
+                (StatusCodes.Status409Conflict, new ErrorResponse("exploration_not_retryable", explorationNotRetryableException.Message)),
+            Storporate.Modules.StudentGrowthExperience.Exceptions.ExplorationLimitReachedException explorationLimitReachedException =>
+                (StatusCodes.Status409Conflict, new ErrorResponse("exploration_limit_reached", explorationLimitReachedException.Message)),
+            Storporate.Modules.StudentGrowthExperience.Exceptions.ExplorationHasNoSummaryException explorationHasNoSummaryException =>
+                (StatusCodes.Status409Conflict, new ErrorResponse("exploration_has_no_summary", explorationHasNoSummaryException.Message)),
             ActorTypeRequiredException actorTypeRequiredException =>
                 (StatusCodes.Status400BadRequest, new ErrorResponse("actor_type_required", actorTypeRequiredException.Message)),
             UnknownSortKeyException unknownSortKeyException =>

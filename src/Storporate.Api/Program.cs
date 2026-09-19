@@ -367,6 +367,7 @@ app.UseAuthorization();
 app.MapIdentityEndpoints();
 app.MapAuditLogEndpoints();
 app.MapPortfolioEndpoints();
+app.MapStudentGrowthExperienceEndpoints();
 
 // --- Temporary diagnostics endpoints (Phase 2: validation/exception-handler proof; Phase 3/4
 // add llm-ping/storage-ping alongside these) ---

@@ -20,6 +20,26 @@ namespace Storporate.Modules.StudentGrowthExperience;
 /// model never sees a request it has to truncate.
 /// </para>
 /// <para>
+/// <b>Total prompt budget (Phase 2).</b> The user prompt is bounded by
+/// <see cref="MaxUserPromptCharacters"/> = 24 000. Inside that envelope the
+/// budget splits roughly as:
+/// <list type="bullet">
+/// <item>Up to <see cref="MaxFeedCandidates"/> × <see cref="MaxFeedCandidateCharacters"/>
+/// ≈ 12 × 600 = 7 200 chars for feed candidates (title + summary; URL stays
+/// server-side and is not embedded).</item>
+/// <item>Up to <see cref="HistoryWindowTurns"/> × 2 history entries capped at
+/// <see cref="MaxHistoryEntryCharacters"/> = 6 × 2 × 3 000 = 36 000 if the
+/// window were ever fully populated, but only the most recent few turns
+/// are ever included and each one is cut to <see cref="MaxHistoryEntryCharacters"/>.</item>
+/// <item>Portfolio items are appended newest-first until the
+/// <see cref="MaxUserPromptCharacters"/> budget is exhausted.</item>
+/// </list>
+/// The feed candidate slice is intentionally conservative because a feed
+/// summary can be longer than the headline suggests; truncating the feed
+/// summary to 600 chars keeps the candidate section from crowding out the
+/// portfolio section.
+/// </para>
+/// <para>
 /// <b>Why no <c>[Required]</c>.</b> Follows the rule established for the
 /// other <c>Options</c> classes (see the <c>BackgroundJobOptions</c>
 /// commentary in <c>Program.cs</c>): every value has a sensible default, and
@@ -50,15 +70,19 @@ public sealed class AdvisorOptions
     /// Maximum characters of any single feed candidate embedded into the
     /// user prompt. Feed items above this size are skipped entirely
     /// (rather than truncated) — a partial feed item is more misleading
-    /// than no item at all.
+    /// than no item at all. Phase 2: tightened from 1 500 → 600 to keep
+    /// 12 candidates × 600 ≈ 7 200 chars inside the 24 000-char budget.
     /// </summary>
-    public int MaxFeedCandidateCharacters { get; init; } = 1_500;
+    public int MaxFeedCandidateCharacters { get; init; } = 600;
 
     /// <summary>
     /// Maximum number of feed candidates included in the user prompt. The
-    /// top-N by recency are kept; the rest are dropped.
+    /// top-N by recency are kept; the rest are dropped. Phase 2: widened
+    /// from 6 → 12 so the advisor sees a broader slice of the platform's
+    /// recent outside facts. The per-candidate character cap keeps the
+    /// total slice at roughly 7 200 chars.
     /// </summary>
-    public int MaxFeedCandidates { get; init; } = 6;
+    public int MaxFeedCandidates { get; init; } = 12;
 
     /// <summary>
     /// Rolling-window size for prior assistant turns included as
@@ -98,4 +122,15 @@ public sealed class AdvisorOptions
     /// the worker doesn't race a busy host.
     /// </summary>
     public TimeSpan HttpTimeout { get; init; } = TimeSpan.FromSeconds(120);
+
+    /// <summary>
+    /// Maximum number of <c>Exploration</c> rows a single student may own
+    /// at any one time. Hitting this cap on <c>POST /api/growth/explorations</c>
+    /// maps to <c>409 exploration_limit_reached</c> via
+    /// <see cref="Advisor.Exceptions.ExplorationLimitReachedException"/>.
+    /// Sized generously (20) because the per-student exploration is a
+    /// long-running artifact — a student is expected to keep a handful of
+    /// live directions in flight and refresh / prune the rest.
+    /// </summary>
+    public int MaxExplorationsPerStudent { get; init; } = 20;
 }
