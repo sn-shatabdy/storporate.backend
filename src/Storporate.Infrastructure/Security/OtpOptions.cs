@@ -20,4 +20,13 @@ public sealed class OtpOptions
 
     [Range(1, int.MaxValue)]
     public int MaxAttempts { get; init; } = 5;
+
+    /// <summary>
+    /// A fixed code that, when <see cref="Microsoft.Extensions.Hosting.IHostEnvironment.IsDevelopment"/>
+    /// is true, bypasses OTP lookup/expiry/attempt checks entirely for any email. Must be null in every
+    /// non-Development environment — only ever set in appsettings.Development.json, never in the base
+    /// appsettings.json. Two independent gates (config presence + runtime environment check) exist
+    /// specifically so this can never activate outside local development.
+    /// </summary>
+    public string? MasterCode { get; init; }
 }

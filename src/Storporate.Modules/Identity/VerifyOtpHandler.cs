@@ -1,6 +1,9 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Storporate.Infrastructure.Auditing;
 using Storporate.Infrastructure.Persistence;
+using Storporate.Infrastructure.Security;
 using Storporate.Modules.Identity.Exceptions;
 using Storporate.SharedKernel.Abstractions;
 using Storporate.SharedKernel.Auditing;
@@ -18,6 +21,7 @@ namespace Storporate.Modules.Identity;
 /// correct — i.e. 5 wrong guesses lock the code, and a 6th attempt (right or wrong) always fails.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Every failure branch writes its audit row
 /// <em>before</em> throwing — the writer's swallow-and-log safety net only covers Postgres
 /// failures, not the case where the audit write itself never ran. By placing the
@@ -26,6 +30,19 @@ namespace Storporate.Modules.Identity;
 /// regardless of what happens to the exception afterwards. The success branch audits
 /// <c>"login_succeeded"</c> against the resulting <see cref="User.Id"/> (not the email), so the
 /// row keys to a stable, account-scoped resource id.
+/// </para>
+/// <para>
+/// <b>Dev-only master-code bypass.</b> When both
+/// <see cref="OtpOptions.MasterCode"/> is set AND the host environment is Development, presenting
+/// that fixed code authenticates the caller without ever requiring a real OTP to have been
+/// requested — a developer-convenience only, so local browser tests don't need to read real
+/// codes out of an inbox. The bypass skips the lookup/expiry/attempt-check block entirely,
+/// writes a distinct <c>"otp_verify_dev_master_code_used"</c> audit marker (in addition to the
+/// normal <c>"login_succeeded"</c> row) so a future audit-log review can identify it, and is
+/// double-gated so a misconfigured <c>MasterCode</c> in a non-Development environment cannot
+/// activate the bypass — the runtime <c>environment.IsDevelopment()</c> check is independent
+/// from the config-file placement, not a "happens-to-be-set-here" accident.
+/// </para>
 /// </remarks>
 public static class VerifyOtpHandler
 {
@@ -45,10 +62,36 @@ public static class VerifyOtpHandler
         WriteDbContext dbContext,
         IJwtTokenService tokenService,
         IAuditLogWriter auditLogWriter,
+        IOptions<OtpOptions> otpOptions,
+        IHostEnvironment environment,
         CancellationToken cancellationToken)
     {
         var normalizedEmail = RequestOtpHandler.NormalizeEmail(email);
         var now = DateTime.UtcNow;
+
+        // Dev-only bypass. Two independent gates — config presence AND a runtime
+        // IsDevelopment() check on the actual host environment — must BOTH be true. A real
+        // OtpCode row is deliberately NOT required on this path: the whole point is that the
+        // developer can log in by typing any email + the master code without ever having run
+        // /api/auth/otp/request.
+        var masterCode = otpOptions.Value.MasterCode;
+        var isMasterCodeBypass =
+            environment.IsDevelopment()
+            && !string.IsNullOrEmpty(masterCode)
+            && code == masterCode;
+
+        if (isMasterCodeBypass)
+        {
+            await auditLogWriter.WriteAsync(
+                action: "otp_verify_dev_master_code_used",
+                resourceType: "User",
+                resourceId: normalizedEmail,
+                metadataJson: AuditReasons.OtpDevMasterCodeUsed,
+                cancellationToken: cancellationToken);
+
+            return await ResolveUserAndIssueSessionAsync(
+                normalizedEmail, actorType, userAgent, now, dbContext, tokenService, auditLogWriter, cancellationToken);
+        }
 
         var otpCode = await dbContext.OtpCodes
             .Where(o => o.Email == normalizedEmail && o.ConsumedAt == null)
@@ -104,7 +147,28 @@ public static class VerifyOtpHandler
         }
 
         otpCode.ConsumedAt = now;
+        await dbContext.SaveChangesAsync(cancellationToken);
 
+        return await ResolveUserAndIssueSessionAsync(
+            normalizedEmail, actorType, userAgent, now, dbContext, tokenService, auditLogWriter, cancellationToken);
+    }
+
+    /// <summary>
+    /// Shared "get-or-create user, issue session, audit success" tail. Both the normal-codes-correct
+    /// path and the dev-only master-code bypass path funnel through here so the user-resolution
+    /// and audit-success logic lives in exactly one place — the two paths must agree on what
+    /// "logged in successfully" means (same <c>login_succeeded</c> audit row, same token issuance).
+    /// </summary>
+    private static async Task<VerifyOtpResult> ResolveUserAndIssueSessionAsync(
+        string normalizedEmail,
+        string? actorType,
+        string? userAgent,
+        DateTime now,
+        WriteDbContext dbContext,
+        IJwtTokenService tokenService,
+        IAuditLogWriter auditLogWriter,
+        CancellationToken cancellationToken)
+    {
         var user = await dbContext.Users.FirstOrDefaultAsync(u => u.Email == normalizedEmail, cancellationToken);
         var isNewUser = user is null;
 
@@ -145,9 +209,8 @@ public static class VerifyOtpHandler
             };
 
             dbContext.Users.Add(user);
+            await dbContext.SaveChangesAsync(cancellationToken);
         }
-
-        await dbContext.SaveChangesAsync(cancellationToken);
 
         var tokens = await IssueSessionHandler.ExecuteAsync(user, userAgent, tokenService, cancellationToken);
 
