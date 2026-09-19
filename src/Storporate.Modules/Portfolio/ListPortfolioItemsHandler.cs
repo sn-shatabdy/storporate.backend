@@ -137,22 +137,34 @@ public static class ListPortfolioItemsHandler
         {
             var pageItemIds = pagedItems.Select(i => i.Id).ToList();
 
+            // Project (PortfolioItemId, SkillName, ConfidenceBand) into SQL — the only
+            // fields the response needs. Hydrating the full entity would also pull the
+            // long `Explanation` column over the wire for every finding, which the
+            // condensed timeline preview is deliberately scoped to NOT return.
+            // Mirrors the per-item projection in GetPortfolioItemAnalysisHandler
+            // (which pulls SkillName/ConfidenceBand/Explanation because the detail
+            // page surfaces the explanation; we don't, so we project narrower).
             var pageFindings = await dbContext.PortfolioSkillFindings
                 .AsNoTracking()
                 .Where(finding => pageItemIds.Contains(finding.PortfolioItemId))
-                .OrderBy(finding => finding.CreatedAt)
+                .Select(finding => new
+                {
+                    finding.PortfolioItemId,
+                    finding.SkillName,
+                    finding.ConfidenceBand,
+                })
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
 
             var findingsByItemId = pageFindings
-                .GroupBy(finding => finding.PortfolioItemId)
+                .GroupBy(
+                    finding => finding.PortfolioItemId,
+                    finding => new PortfolioSkillPreview(
+                        SkillName: finding.SkillName,
+                        ConfidenceBand: finding.ConfidenceBand))
                 .ToDictionary(
                     group => group.Key,
-                    group => (IReadOnlyList<PortfolioSkillPreview>)group
-                        .Select(finding => new PortfolioSkillPreview(
-                            SkillName: finding.SkillName,
-                            ConfidenceBand: finding.ConfidenceBand))
-                        .ToArray());
+                    group => (IReadOnlyList<PortfolioSkillPreview>)group.ToArray());
 
             for (var index = 0; index < pagedItems.Count; index++)
             {
