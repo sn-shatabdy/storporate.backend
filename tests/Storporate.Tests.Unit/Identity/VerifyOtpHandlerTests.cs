@@ -335,6 +335,34 @@ public class VerifyOtpHandlerTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_NewEmail_WithMasterCodeBypass_InDevelopment_OrganizationActorType_CreatesUnverifiedUser()
+    {
+        // Pin the bypass's contract for the Organization actorType: a brand-new email
+        // with actorType=Organization is created Unverified (matching the real-code
+        // path's contract for non-Student actor types) and not auto-Verified like
+        // Student is. The bypass path must honor the same actorType → verification
+        // status mapping the real-code path applies, otherwise a developer using the
+        // bypass would silently get an Organization account marked Verified.
+        await using var dbContext = CreateDbContext();
+        var tokenService = new FakeJwtTokenService();
+        var auditLogWriter = new FakeAuditLogWriter();
+
+        var result = await VerifyOtpHandler.ExecuteAsync(
+            Email, MasterCode, ActorTypes.Organization, userAgent: null, dbContext, tokenService, auditLogWriter,
+            MasterCodeEnabled(), FakeHostEnvironment.Development(), CancellationToken.None);
+
+        Assert.True(result.IsNewUser);
+        Assert.Equal(ActorTypes.Organization, result.User.ActorType);
+        Assert.Equal(VerificationStatuses.Unverified, result.User.VerificationStatus);
+        // The distinct bypass audit row is still required for Organization accounts
+        // — the actorType doesn't change which audit entries fire.
+        Assert.Single(
+            auditLogWriter.Recorded,
+            e => e.Action == "otp_verify_dev_master_code_used");
+        Assert.Single(auditLogWriter.Recorded, e => e.Action == "login_succeeded");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WithMasterCodeBypass_InProduction_RejectsAsAnyOtherWrongCode()
     {
         // AC (security-critical): the identical call (code "000000", MasterCode = "000000"

@@ -147,6 +147,9 @@ public static class ListPortfolioItemsHandler
             var pageFindings = await dbContext.PortfolioSkillFindings
                 .AsNoTracking()
                 .Where(finding => pageItemIds.Contains(finding.PortfolioItemId))
+                // Same order as GetPortfolioItemAnalysisHandler so list and detail agree.
+                .OrderBy(finding => finding.CreatedAt)
+                .ThenBy(finding => finding.Id)
                 .Select(finding => new
                 {
                     finding.PortfolioItemId,
