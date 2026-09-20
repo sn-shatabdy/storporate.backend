@@ -8,15 +8,13 @@ using Storporate.Tests.Unit.Fakes;
 namespace Storporate.Tests.Unit.Auth;
 
 /// <summary>
-/// <see cref="AuthEndpointsFactory"/> derivative for STOR-43 Phase 1
-/// DiscoveryHiring endpoint tests. Swaps <see cref="IEmbeddingClient"/> for
-/// <see cref="FakeEmbeddingClient"/> so no real LM Studio / OpenAI-compatible
-/// endpoint is required when the refresh processor happens to run during the
-/// endpoint test (it shouldn't — these tests target the synchronous request
-/// pipeline — but the swap removes any chance of an accidental LLM call),
-/// and swaps <see cref="IAuditLogWriter"/> for <see cref="FakeAuditLogWriter"/>
-/// so the test can inspect "searchable_profile_enabled" /
-/// "searchable_profile_disabled" rows directly.
+/// <see cref="AuthEndpointsFactory"/> derivative for STOR-43 DiscoveryHiring
+/// endpoint tests (Phase 1 + Phase 2). Swaps <see cref="IEmbeddingClient"/>
+/// and <see cref="ILlmClient"/> for the recording fakes so any processor that
+/// happens to run during the endpoint test (refresh + search) never reaches
+/// out to localhost:1234, and swaps <see cref="IAuditLogWriter"/> for
+/// <see cref="FakeAuditLogWriter"/> so the test can inspect
+/// <c>searchable_profile_*</c> / <c>talent_search_*</c> audit rows directly.
 ///
 /// Everything else — in-memory EF provider, placeholder Options values,
 /// ambient account context, fake artifact store — is inherited unchanged.
@@ -24,6 +22,7 @@ namespace Storporate.Tests.Unit.Auth;
 public sealed class DiscoveryHiringEndpointsFactory : AuthEndpointsFactory
 {
     public FakeEmbeddingClient EmbeddingClient { get; } = new();
+    public FakeLlmClient LlmClient { get; } = new();
     public FakeAuditLogWriter AuditLogWriter { get; } = new();
 
     protected override IHost CreateHost(IHostBuilder builder)
@@ -38,6 +37,14 @@ public sealed class DiscoveryHiringEndpointsFactory : AuthEndpointsFactory
             services.RemoveAll<IEmbeddingClient>();
             services.AddSingleton(_ => EmbeddingClient);
             services.AddTransient<IEmbeddingClient>(_ => EmbeddingClient);
+
+            // Phase 2: SearchTalentJobProcessor also depends on ILlmClient.
+            // RemoveAll + re-register the singleton fake so endpoint tests
+            // that drive the search path see deterministic canned
+            // responses (and so the processor's retrieval → ranking
+            // pipeline can be exercised end-to-end without an LLM call).
+            services.RemoveAll<ILlmClient>();
+            services.AddSingleton<ILlmClient>(_ => LlmClient);
 
             // IAuditLogWriter is registered as Scoped by
             // SecurityGovernance/DependencyInjection.cs. Replace it with the

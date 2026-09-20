@@ -90,6 +90,13 @@ public sealed class WriteDbContext : DbContext
     public DbSet<StudentSearchProfile> StudentSearchProfiles => Set<StudentSearchProfile>();
     public DbSet<TalentIndexEntry> TalentIndexEntries => Set<TalentIndexEntry>();
 
+    // STOR-43 Phase 2: the Organization's plain-language search request. IAccountScoped
+    // so the global query filter + save-time RowLevelSecurityInterceptor + the
+    // account_scoped RLS policy installed by the AddTalentSearchRequestRowLevelSecurity
+    // migration all key on its AccountId — a cross-account id never matches the
+    // busy-check lookup on POST, nor the GET endpoint's id lookup.
+    public DbSet<TalentSearchRequest> TalentSearchRequests => Set<TalentSearchRequest>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -112,6 +119,7 @@ public sealed class WriteDbContext : DbContext
         modelBuilder.ApplyConfiguration(new FeedItemConfiguration());
         modelBuilder.ApplyConfiguration(new StudentSearchProfileConfiguration());
         modelBuilder.ApplyConfiguration(new TalentIndexEntryConfiguration());
+        modelBuilder.ApplyConfiguration(new TalentSearchRequestConfiguration());
 
         // Global query filter for every IAccountScoped entity type. We walk the model
         // once via reflection to discover which CLR types implement IAccountScoped,

@@ -2,6 +2,7 @@ using FluentValidation;
 using Microsoft.AspNetCore.Diagnostics;
 using Storporate.Infrastructure.Llm;
 using Storporate.Infrastructure.Storage;
+using Storporate.Modules.DiscoveryHiring.Exceptions;
 using Storporate.Modules.Identity.Exceptions;
 using Storporate.Modules.SecurityGovernance;
 
@@ -56,6 +57,8 @@ public sealed class GlobalExceptionHandler(
                 (StatusCodes.Status409Conflict, new ErrorResponse("portfolio_analysis_not_retryable", portfolioAnalysisNotRetryableException.Message)),
             Storporate.Modules.StudentGrowthExperience.Exceptions.ExplorationBusyException explorationBusyException =>
                 (StatusCodes.Status409Conflict, new ErrorResponse("exploration_busy", explorationBusyException.Message)),
+            Storporate.Modules.DiscoveryHiring.Exceptions.TalentSearchBusyException talentSearchBusyException =>
+                (StatusCodes.Status409Conflict, new ErrorResponse("talent_search_busy", talentSearchBusyException.Message)),
             Storporate.Modules.StudentGrowthExperience.Exceptions.ExplorationNotRetryableException explorationNotRetryableException =>
                 (StatusCodes.Status409Conflict, new ErrorResponse("exploration_not_retryable", explorationNotRetryableException.Message)),
             Storporate.Modules.StudentGrowthExperience.Exceptions.ExplorationLimitReachedException explorationLimitReachedException =>
