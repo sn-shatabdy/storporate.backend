@@ -86,11 +86,21 @@ public static class SystemRoles
         //     Portfolio.* triple (Create + Read + Delete). University / Club /
         //     Organization have no use for portfolio capture, so they keep their existing
         //     Jobs.Read-only grant set unchanged.
+        //   - STOR-43 Phase 1: Organizations gain TalentSearch.* (Create + Read) so
+        //     Phase 2 can ship the employer search endpoints; Students gain
+        //     SearchableProfile.* (Read + Update) so the opt-in endpoints can
+        //     gate on permissions like every other module's surface. Neither role
+        //     gets the other's grant — the talent-search surface is hiring-side and
+        //     the searchable-profile surface is student-side.
         var readOnly = new HashSet<string>(StringComparer.Ordinal) { Permissions.Jobs.Read };
         var fullJobs = new HashSet<string>(StringComparer.Ordinal)
         {
             Permissions.Jobs.Read,
             Permissions.Jobs.Write,
+            // STOR-43 Phase 1: Organization is the only hiring-side actor and the
+            // talent-search pool is the Organization-only view of opted-in students.
+            Permissions.TalentSearch.Create,
+            Permissions.TalentSearch.Read,
         };
         var studentGrants = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -114,6 +124,11 @@ public static class SystemRoles
             Permissions.Advisor.Delete,
             Permissions.Feed.Read,
             Permissions.Feed.Update,
+            // STOR-43 Phase 1: only the Student owns a SearchableProfile row,
+            // and only they can opt in or out. Read powers the GET endpoint;
+            // Update powers the PUT endpoint.
+            Permissions.SearchableProfile.Read,
+            Permissions.SearchableProfile.Update,
         };
         var administrator = new HashSet<string>(Permissions.All, StringComparer.Ordinal);
 

@@ -16,6 +16,7 @@ using Storporate.Infrastructure.Email;
 using Storporate.Infrastructure.Llm;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Infrastructure.Persistence.Interceptors;
+using Storporate.Infrastructure.Persistence.TalentIndex;
 using Storporate.Infrastructure.Security;
 using Storporate.Infrastructure.Security.RateLimiting;
 using Storporate.Infrastructure.Storage;
@@ -24,6 +25,7 @@ using Storporate.Modules.PlatformFoundations;
 using Storporate.Modules.SecurityGovernance;
 using Storporate.Modules.Portfolio;
 using Storporate.Modules.StudentGrowthExperience;
+using Storporate.Modules.DiscoveryHiring;
 using Storporate.Modules.PlatformFoundations.Diagnostics;
 using Storporate.Infrastructure.Jobs;
 using Storporate.SharedKernel.Abstractions;
@@ -79,6 +81,16 @@ builder.Services
     .AddOptions<BionicOptions>()
     .Bind(builder.Configuration.GetSection(BionicOptions.SectionName))
     .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+// STOR-43 Phase 1: EmbeddingOptions binds the talent-search embedding model. No
+// [Required] members — every property has a default (BaseUrl/ModelId default to
+// empty so the embedding client falls back to the chat endpoint / fails fast at
+// the call site rather than at startup, matching the established pattern for new
+// Options classes that test hosts must bind without a placeholder value).
+builder.Services
+    .AddOptions<EmbeddingOptions>()
+    .Bind(builder.Configuration.GetSection(EmbeddingOptions.SectionName))
     .ValidateOnStart();
 
 builder.Services
@@ -182,6 +194,7 @@ builder.Services.AddIdentityHandlers();
 builder.Services.AddSecurityGovernanceHandlers();
 builder.Services.AddPortfolioHandlers();
 builder.Services.AddStudentGrowthExperienceHandlers();
+builder.Services.AddDiscoveryHiringHandlers();
 
 // --- TimeProvider: STOR-38 Phase 2 background worker uses TimeProvider.GetUtcNow()
 // to stamp job StartedAt / UpdatedAt / CompletedAt without going through DateTimeOffset.UtcNow
@@ -215,6 +228,20 @@ switch (emailProvider)
 
 // --- AI provider (Bionic-hosted local LLM, OpenAI-compatible) ---
 builder.Services.AddBionicLlmProvider();
+
+// STOR-43 Phase 1: talent-search embeddings use the same OpenAI-compatible
+// surface as the chat client, so the registrations live side-by-side. The
+// embedding client picks the right named HttpClient at request time based on
+// whether EmbeddingOptions.BaseUrl is populated.
+builder.Services.AddBionicEmbeddings();
+
+// STOR-43 Phase 1: talent-index repository. Scoped (the underlying
+// WriteDbContext is scoped and the implementation reads
+// Database.ProviderName at construction to pick the pgvector vs in-memory
+// branch). The migration installs the pgvector extension + vector(768) +
+// HNSW vector_cosine_ops index; under the InMemory provider the
+// implementation falls back to a per-context dictionary store.
+builder.Services.AddScoped<ITalentIndexRepository, TalentIndexRepository>();
 
 // --- Artifact storage (S3-compatible; local MinIO now, real Cloudflare R2 later) ---
 builder.Services.AddArtifactStorage();
@@ -368,6 +395,7 @@ app.MapIdentityEndpoints();
 app.MapAuditLogEndpoints();
 app.MapPortfolioEndpoints();
 app.MapStudentGrowthExperienceEndpoints();
+app.MapDiscoveryHiringEndpoints();
 
 // --- Temporary diagnostics endpoints (Phase 2: validation/exception-handler proof; Phase 3/4
 // add llm-ping/storage-ping alongside these) ---

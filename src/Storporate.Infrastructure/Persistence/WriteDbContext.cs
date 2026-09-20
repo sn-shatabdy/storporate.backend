@@ -80,6 +80,16 @@ public sealed class WriteDbContext : DbContext
     public DbSet<StudentFeedEntry> StudentFeedEntries => Set<StudentFeedEntry>();
     public DbSet<FeedItem> FeedItems => Set<FeedItem>();
 
+    // STOR-43 Phase 1: talent-search student opt-in (tenant) + non-tenant search
+    // index. StudentSearchProfile is IAccountScoped so the global query filter
+    // restricts reads to the caller's account automatically; the matching
+    // account_scoped RLS policy is installed by the AddTalentSearchTables
+    // migration. TalentIndexEntry is intentionally NOT IAccountScoped — every
+    // Organization account reads from it via the Phase 2 search endpoint, and
+    // only the RefreshTalentIndexEntryProcessor background job writes to it.
+    public DbSet<StudentSearchProfile> StudentSearchProfiles => Set<StudentSearchProfile>();
+    public DbSet<TalentIndexEntry> TalentIndexEntries => Set<TalentIndexEntry>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -100,6 +110,8 @@ public sealed class WriteDbContext : DbContext
         modelBuilder.ApplyConfiguration(new ExplorationComparisonConfiguration());
         modelBuilder.ApplyConfiguration(new StudentFeedEntryConfiguration());
         modelBuilder.ApplyConfiguration(new FeedItemConfiguration());
+        modelBuilder.ApplyConfiguration(new StudentSearchProfileConfiguration());
+        modelBuilder.ApplyConfiguration(new TalentIndexEntryConfiguration());
 
         // Global query filter for every IAccountScoped entity type. We walk the model
         // once via reflection to discover which CLR types implement IAccountScoped,

@@ -168,6 +168,63 @@ public static class Permissions
     }
 
     /// <summary>
+    /// Permissions governing the employer talent-search surface (STOR-43). STOR-43
+    /// Phase 1 introduces the student opt-in profile and the non-tenant search
+    /// index that an Organization will eventually query; the constants exist now so
+    /// the per-endpoint <c>RequirePermission</c> gates can attach when the student
+    /// opt-in endpoints land. Phase 2 adds the search endpoints themselves
+    /// (<c>POST /api/discovery/talent-searches</c>,
+    /// <c>GET /api/discovery/talent-searches/{id}</c>) and reuses these same constants.
+    /// </summary>
+    /// <remarks>
+    /// Split mirrors the <see cref="Advisor"/> verb split — Create + Read — so a
+    /// future role narrowing (e.g. an Organization persona that can submit searches
+    /// but not read prior results) can grant <see cref="Create"/> without granting
+    /// <see cref="Read"/>. Held by <see cref="SystemRoles.Organization"/> only;
+    /// Students / Universities / Clubs get nothing here because the surface is
+    /// hiring-side.
+    /// </remarks>
+    public static class TalentSearch
+    {
+        /// <summary>Submit a new employer talent search against the
+        /// <see cref="Entities.TalentIndexEntry"/> pool. Phase 1 only declares the
+        /// constant; Phase 2 wires the <c>POST /api/discovery/talent-searches</c>
+        /// endpoint that uses it.</summary>
+        public const string Create = "talent-search:create";
+
+        /// <summary>Read the result of a previously-submitted talent search by id.
+        /// Phase 1 only declares the constant; Phase 2 wires the
+        /// <c>GET /api/discovery/talent-searches/{id}</c> endpoint that uses it.</summary>
+        public const string Read = "talent-search:read";
+    }
+
+    /// <summary>
+    /// Permissions governing the student opt-in "let employers find me" surface
+    /// (STOR-43 Phase 1). The constants gate
+    /// <c>GET /api/discovery/searchable-profile</c> and
+    /// <c>PUT /api/discovery/searchable-profile</c>; only the owning Student ever
+    /// reads or writes their own <see cref="Entities.StudentSearchProfile"/> row
+    /// (the EF global query filter + RLS policy both key on
+    /// <see cref="Entities.IAccountScoped.AccountId"/>).
+    /// </summary>
+    /// <remarks>
+    /// Held by <see cref="SystemRoles.Student"/> only; Organizations / Universities
+    /// / Clubs / Administrator get nothing here because the surface is the
+    /// student's own opt-in profile (the Administrator role covers it through
+    /// <see cref="All"/> if a future story ever needs a support path).
+    /// </remarks>
+    public static class SearchableProfile
+    {
+        /// <summary>Read the caller's own <see cref="Entities.StudentSearchProfile"/>
+        /// (used by <c>GET /api/discovery/searchable-profile</c>).</summary>
+        public const string Read = "searchable-profile:read";
+
+        /// <summary>Update the caller's own <see cref="Entities.StudentSearchProfile"/>
+        /// (used by <c>PUT /api/discovery/searchable-profile</c>).</summary>
+        public const string Update = "searchable-profile:update";
+    }
+
+    /// <summary>
     /// Every permission literal defined across the nested classes above, deduped and
     /// ordinal-sorted. Built once via reflection at class-initialization time so adding a new
     /// nested class / const is automatically reflected here without a hand-edited list.

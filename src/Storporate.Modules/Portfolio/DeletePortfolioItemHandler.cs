@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Storporate.Infrastructure.Auditing;
 using Storporate.Infrastructure.Persistence;
+using Storporate.SharedKernel;
 using Storporate.SharedKernel.Entities;
 using Storporate.SharedKernel.Storage;
 
@@ -95,6 +96,22 @@ public static class DeletePortfolioItemHandler
         dbContext.PortfolioSkillFindings.RemoveRange(findings);
 
         dbContext.PortfolioItems.Remove(item);
+
+        // STOR-43 Phase 1: enqueue a talent-index refresh job in the same
+        // SaveChanges as the portfolio-item deletion. The helper short-
+        // circuits when the student isn't opted in, so a non-searchable
+        // student's deletion costs nothing beyond a single SELECT. Adding
+        // the new job row to the change tracker here and committing it in
+        // the same SaveChangesAsync below makes "item gone but stale entry
+        // still published" structurally impossible.
+        await TalentIndexRefreshJobs
+            .EnqueueIfSearchableAsync(
+                dbContext,
+                item.AccountId,
+                nowUtc: DateTime.UtcNow,
+                cancellationToken)
+            .ConfigureAwait(false);
+
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
         if (submissionType == PortfolioSubmissionTypes.File && !string.IsNullOrEmpty(storageKey))

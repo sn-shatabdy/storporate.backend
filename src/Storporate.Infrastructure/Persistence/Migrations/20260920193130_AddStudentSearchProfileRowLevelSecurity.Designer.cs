@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Storporate.Infrastructure.Persistence;
@@ -11,9 +12,10 @@ using Storporate.Infrastructure.Persistence;
 namespace Storporate.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(WriteDbContext))]
-    partial class WriteDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260920193130_AddStudentSearchProfileRowLevelSecurity")]
+    partial class AddStudentSearchProfileRowLevelSecurity
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -583,117 +585,6 @@ namespace Storporate.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("StudentFeedEntries", (string)null);
-                });
-
-            modelBuilder.Entity("Storporate.SharedKernel.Entities.StudentSearchProfile", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("AccountId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("DisplayName")
-                        .IsRequired()
-                        .HasMaxLength(80)
-                        .HasColumnType("character varying(80)");
-
-                    b.Property<string>("FieldOfStudy")
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<string>("Headline")
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<bool>("IsSearchable")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTimeOffset?>("OptedInAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("ShowFieldOfStudy")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("ShowHeadline")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("ShowStudyYear")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("ShowUniversity")
-                        .HasColumnType("boolean");
-
-                    b.Property<int?>("StudyYear")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("University")
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AccountId")
-                        .IsUnique();
-
-                    b.ToTable("StudentSearchProfiles", (string)null);
-                });
-
-            modelBuilder.Entity("Storporate.SharedKernel.Entities.TalentIndexEntry", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ContentHash")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("DisplayName")
-                        .IsRequired()
-                        .HasMaxLength(80)
-                        .HasColumnType("character varying(80)");
-
-                    b.Property<string>("FieldOfStudy")
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<string>("Headline")
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<string>("ItemsJson")
-                        .IsRequired()
-                        .HasColumnType("jsonb");
-
-                    b.Property<string>("SearchText")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<Guid>("StudentAccountId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int?>("StudyYear")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("University")
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("StudentAccountId")
-                        .IsUnique();
-
-                    b.ToTable("TalentIndexEntries", (string)null);
                 });
 
             modelBuilder.Entity("Storporate.SharedKernel.Entities.User", b =>
