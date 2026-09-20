@@ -103,6 +103,71 @@ public static class Permissions
     }
 
     /// <summary>
+    /// Permissions governing the StudentGrowthExperience advisor surface
+    /// (Explorations, messages, summaries, context notes, comparisons).
+    /// STOR-40 Phase 1: the constants exist now so the per-resource
+    /// <c>RequirePermission</c> gates can attach when the Phase 2 endpoints
+    /// land; the endpoints themselves are not wired in this story.
+    /// </summary>
+    /// <remarks>
+    /// The verb split mirrors <see cref="Portfolio"/>'s shape (Create /
+    /// Read / Update / Delete) so a future role narrowing — e.g. a read-only
+    /// parent persona reviewing a student's saved summaries — can grant
+    /// <see cref="Read"/> without gaining write powers. The four-verb split
+    /// is intentional even where Phase 2 doesn't yet exercise Update / Delete
+    /// on every entity; the permission table is the contract that future
+    /// stories will code against, and adding a verb later would be a breaking
+    /// schema change for any role that already enumerates them.
+    /// </remarks>
+    public static class Advisor
+    {
+        /// <summary>Create a new <see cref="Entities.Exploration"/> (opening turn) or
+        /// append a <see cref="Entities.ExplorationMessage"/> (subsequent turn) under
+        /// the caller's account.</summary>
+        public const string Create = "advisor:create";
+
+        /// <summary>Read <see cref="Entities.Exploration"/>, <see cref="Entities.ExplorationMessage"/>,
+        /// <see cref="Entities.ExplorationSummaryVersion"/>, <see cref="Entities.StudentContextNote"/>,
+        /// and <see cref="Entities.ExplorationComparison"/> rows owned by the caller's account.</summary>
+        public const string Read = "advisor:read";
+
+        /// <summary>Update <see cref="Entities.Exploration"/> (e.g. <c>PUT /explorations/{id}/title</c>)
+        /// and <see cref="Entities.ExplorationComparison"/> rows owned by the caller's account.</summary>
+        public const string Update = "advisor:update";
+
+        /// <summary>Delete <see cref="Entities.Exploration"/> and dependent rows
+        /// (messages, summary versions, context notes, comparisons) under the
+        /// caller's account.</summary>
+        public const string Delete = "advisor:delete";
+    }
+
+    /// <summary>
+    /// Permissions governing the StudentGrowthExperience feed surface
+    /// (<see cref="Entities.StudentFeedEntry"/> rows that say "this outside
+    /// <see cref="Entities.FeedItem"/> is relevant to this student"). STOR-40
+    /// Phase 3 introduces the feed-refresh background service and the per-account
+    /// match job; the constants exist now so the per-endpoint
+    /// <c>RequirePermission</c> gates can attach when those endpoints land.
+    /// </summary>
+    /// <remarks>
+    /// Note the absence of <c>Create</c> / <c>Delete</c> verbs — students never
+    /// write or remove <see cref="Entities.StudentFeedEntry"/> rows directly. The
+    /// match job (background, server-driven) writes them; the feed page reads
+    /// them; the student's "mark as read" / "dismiss" UI is the only mutation
+    /// the user sees, and that mutation lands under <see cref="Update"/>.
+    /// </remarks>
+    public static class Feed
+    {
+        /// <summary>Read <see cref="Entities.StudentFeedEntry"/> rows owned by the
+        /// caller's account.</summary>
+        public const string Read = "feed:read";
+
+        /// <summary>Update <see cref="Entities.StudentFeedEntry"/> rows owned by the
+        /// caller's account (the future "mark as read" / "dismiss" UI).</summary>
+        public const string Update = "feed:update";
+    }
+
+    /// <summary>
     /// Every permission literal defined across the nested classes above, deduped and
     /// ordinal-sorted. Built once via reflection at class-initialization time so adding a new
     /// nested class / const is automatically reflected here without a hand-edited list.

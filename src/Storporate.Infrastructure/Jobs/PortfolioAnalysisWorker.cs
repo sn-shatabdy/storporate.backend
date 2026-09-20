@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Storporate.Infrastructure.Authorization;
 
 namespace Storporate.Infrastructure.Jobs;
 
@@ -15,6 +16,14 @@ namespace Storporate.Infrastructure.Jobs;
 public interface IBackgroundJobProcessor
 {
     /// <summary>
+    /// The discriminator string (<see cref="SharedKernel.Entities.Job.Type"/>) this
+    /// processor owns. The reaper (<see cref="StaleJobReaper"/>) and the worker use
+    /// this to route a job to the right processor without the worker or reaper
+    /// needing to take a cross-module dependency on the producer module's types.
+    /// </summary>
+    string JobType { get; }
+
+    /// <summary>
     /// Try to claim one <c>Pending</c> job of the processor's type and process
     /// it to a terminal state. Returns <see cref="BackgroundJobTickOutcome.NoWork"/>
     /// when no <c>Pending</c> job is visible; <see cref="BackgroundJobTickOutcome.ClaimedByAnother"/>
@@ -22,6 +31,18 @@ public interface IBackgroundJobProcessor
     /// when this call did the work.
     /// </summary>
     Task<BackgroundJobTickOutcome> TryProcessOneAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Called by the <see cref="StaleJobReaper"/> when a <see cref="SharedKernel.Entities.Job"/>
+    /// of this processor's <see cref="JobType"/> has been failed by the reaper because
+    /// it stopped responding. The default implementation is a no-op so processors that
+    /// don't own a parent row (or that can tolerate a stuck <c>Failed</c> status) don't
+    /// have to override it; processors that do own a parent row override this to mirror
+    /// the failed state onto the parent (e.g. flipping a <c>PortfolioItem.AnalysisStatus</c>
+    /// to <c>Failed</c>). Invoked under the job's account scope, not the system scope.
+    /// </summary>
+    Task OnJobAbandonedAsync(SharedKernel.Entities.Job job, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
 }
 
 /// <summary>The outcome of one <see cref="IBackgroundJobProcessor.TryProcessOneAsync"/>
@@ -93,6 +114,16 @@ public sealed class PortfolioAnalysisWorker : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<PortfolioAnalysisWorker> _logger;
 
+    /// <summary>
+    /// The tick index of the next processor to try first. Wraps modulo
+    /// <c>processors.Count</c>; persisted across ticks for the lifetime of
+    /// the hosted service so a multi-tick simulation in the unit test exercises
+    /// the wrap-around correctly. Round-robin prevents the first processor in
+    /// registration order from starving the others when the first one always
+    /// has work to claim.
+    /// </summary>
+    private int _roundRobinStartIndex;
+
     public PortfolioAnalysisWorker(
         IServiceScopeFactory scopeFactory,
         ILogger<PortfolioAnalysisWorker> logger)
@@ -123,8 +154,41 @@ public sealed class PortfolioAnalysisWorker : BackgroundService
                     .GetServices<IBackgroundJobProcessor>()
                     .ToList();
 
+                // 1. Run the reaper first: it scans every account's jobs so it
+                // sits under the system scope, not the per-account scope the
+                // processors use. Any newly Failed job gets handed to the
+                // owning processor's OnJobAbandonedAsync under the job's own
+                // account scope so the parent row (PortfolioItem.AnalysisStatus,
+                // etc.) is mirrored correctly. Reaper failures must never
+                // crash the worker — wrap it in its own try and log.
+                try
+                {
+                    var reaper = scope.ServiceProvider.GetRequiredService<StaleJobReaper>();
+                    var reaperOutcomes = await reaper.RunOnceAsync(stoppingToken).ConfigureAwait(false);
+                    await MirrorAbandonedJobsAsync(scope.ServiceProvider, reaperOutcomes, stoppingToken)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "StaleJobReaper threw; continuing without reaping this tick.");
+                }
+
+                // 2. Round-robin the processor order this tick. The list is small
+                // (typically <10 entries); a fresh List copy avoids mutating the
+                // DI-resolved list while the worker is iterating it.
+                var ordered = OrderRoundRobin(processors, _roundRobinStartIndex);
+                _roundRobinStartIndex = (_roundRobinStartIndex + 1) % Math.Max(1, processors.Count);
+
+                // 3. Try each processor in the rotated order until one
+                // reports Processed or ClaimedByAnother. The end-of-tick rule
+                // stays: stop after the first sign of forward progress so we
+                // re-poll promptly.
                 BackgroundJobTickOutcome? lastOutcome = null;
-                foreach (var processor in processors)
+                foreach (var processor in ordered)
                 {
                     var outcome = await processor
                         .TryProcessOneAsync(stoppingToken)
@@ -162,8 +226,7 @@ public sealed class PortfolioAnalysisWorker : BackgroundService
             {
                 // Never let a single misbehaving tick take the worker down.
                 // Log, wait, and try again. The job itself is left at Running
-                // here — a future story can add a "stale-Running reaper" if
-                // this proves to be a real problem in practice.
+                // here — the reaper now covers the "dead worker" recovery path.
                 _logger.LogError(ex, "Unhandled error in PortfolioAnalysisWorker loop; will retry on the next interval.");
                 try
                 {
@@ -177,5 +240,84 @@ public sealed class PortfolioAnalysisWorker : BackgroundService
         }
 
         _logger.LogInformation("PortfolioAnalysisWorker stopped.");
+    }
+
+    /// <summary>
+    /// Return a new list containing the same elements as <paramref name="processors"/>
+    /// but starting at <paramref name="startIndex"/> (modulo the list size), so the
+    /// worker can rotate first-tried processor each tick. Pure function; the caller
+    /// advances <c>_roundRobinStartIndex</c> independently.
+    /// </summary>
+    internal static IReadOnlyList<IBackgroundJobProcessor> OrderRoundRobin(
+        IReadOnlyList<IBackgroundJobProcessor> processors,
+        int startIndex)
+    {
+        if (processors.Count == 0)
+        {
+            return processors;
+        }
+
+        var normalizedStart = ((startIndex % processors.Count) + processors.Count) % processors.Count;
+        var rotated = new IBackgroundJobProcessor[processors.Count];
+        for (var offset = 0; offset < processors.Count; offset++)
+        {
+            rotated[offset] = processors[(normalizedStart + offset) % processors.Count];
+        }
+        return rotated;
+    }
+
+    /// <summary>
+    /// For each <see cref="StaleJobReaper.ReaperOutcome"/> that ended at
+    /// <see cref="SharedKernel.Entities.JobStatus.Failed"/>, find the matching
+    /// processor (by <see cref="IBackgroundJobProcessor.JobType"/>), open an
+    /// account scope for the job, and call
+    /// <see cref="IBackgroundJobProcessor.OnJobAbandonedAsync"/>. Any processor
+    /// exception is logged and swallowed so one misbehaving processor doesn't
+    /// take the worker down for the others.
+    /// </summary>
+    private async Task MirrorAbandonedJobsAsync(
+        IServiceProvider scopedServices,
+        IReadOnlyList<StaleJobReaper.ReaperOutcome> outcomes,
+        CancellationToken cancellationToken)
+    {
+        if (outcomes.Count == 0)
+        {
+            return;
+        }
+
+        var accountScope = scopedServices.GetRequiredService<IBackgroundAccountScope>();
+        var processors = scopedServices.GetServices<IBackgroundJobProcessor>().ToList();
+        foreach (var outcome in outcomes)
+        {
+            if (outcome.NextStatus != SharedKernel.Entities.JobStatus.Failed)
+            {
+                continue;
+            }
+
+            var processor = processors.FirstOrDefault(p =>
+                string.Equals(p.JobType, outcome.Job.Type, StringComparison.Ordinal));
+            if (processor is null)
+            {
+                _logger.LogWarning(
+                    "StaleJobReaper abandoned job {JobId} but no processor registered for type '{Type}'.",
+                    outcome.Job.Id, outcome.Job.Type);
+                continue;
+            }
+
+            using (accountScope.BeginAccountScope(outcome.Job.AccountId))
+            {
+                try
+                {
+                    await processor.OnJobAbandonedAsync(outcome.Job, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "OnJobAbandonedAsync threw for job {JobId} on processor for type '{Type}'; continuing.",
+                        outcome.Job.Id, outcome.Job.Type);
+                }
+            }
+        }
     }
 }

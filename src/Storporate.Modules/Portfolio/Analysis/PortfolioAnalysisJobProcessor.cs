@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Jobs;
 using Storporate.Infrastructure.Llm;
 using Storporate.Infrastructure.Persistence;
@@ -65,19 +66,61 @@ public sealed class PortfolioAnalysisJobProcessor : IBackgroundJobProcessor
     private readonly EvidenceContentExtractor _extractor;
     private readonly ILogger<PortfolioAnalysisJobProcessor> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly IBackgroundAccountScope _accountScope;
 
     public PortfolioAnalysisJobProcessor(
         WriteDbContext dbContext,
         ILlmClient llmClient,
         EvidenceContentExtractor extractor,
         ILogger<PortfolioAnalysisJobProcessor> logger,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IBackgroundAccountScope accountScope)
     {
         _dbContext = dbContext;
         _llmClient = llmClient;
         _extractor = extractor;
         _logger = logger;
         _timeProvider = timeProvider;
+        _accountScope = accountScope;
+    }
+
+    /// <inheritdoc />
+    public string JobType => PortfolioJobTypes.AnalyzePortfolioItem;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// The <see cref="StaleJobReaper"/> calls this after it has flipped a
+    /// <see cref="Job"/> of <see cref="PortfolioJobTypes.AnalyzePortfolioItem"/> to
+    /// <see cref="JobStatus.Failed"/> because it was stuck in <see cref="JobStatus.Running"/>
+    /// for longer than <see cref="BackgroundJobOptions.StaleRunningAfter"/>. The worker
+    /// has already opened the job's account scope for us (so
+    /// <see cref="IAccountContext.AccountId"/> matches <c>job.AccountId</c>), we just
+    /// need to mirror the failed state onto the parent <see cref="PortfolioItem"/>
+    /// so the UI's analysis badge flips to <see cref="PortfolioAnalysisStatuses.Failed"/>
+    /// and the Retry button becomes available.
+    /// </remarks>
+    public async Task OnJobAbandonedAsync(Job job, CancellationToken cancellationToken)
+    {
+        if (!TryDeserializePayload(job.PayloadJson, out var portfolioItemId))
+        {
+            return;
+        }
+
+        var item = await _dbContext.PortfolioItems
+            .FirstOrDefaultAsync(i => i.Id == portfolioItemId, cancellationToken)
+            .ConfigureAwait(false);
+        if (item is null)
+        {
+            return;
+        }
+
+        item.AnalysisStatus = PortfolioAnalysisStatuses.Failed;
+        item.LastAnalyzedAt = null;
+        await _dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        _logger.LogWarning(
+            "Reaper abandoned job {JobId} for portfolio item {PortfolioItemId}; mirrored AnalysisStatus=Failed.",
+            job.Id, portfolioItemId);
     }
 
     /// <summary>
@@ -87,26 +130,75 @@ public sealed class PortfolioAnalysisJobProcessor : IBackgroundJobProcessor
     /// when the atomic UPDATE matched zero rows (a concurrent tick beat us); and
     /// <see cref="AnalysisTickOutcome.Processed"/> when this call did the work.
     /// </summary>
+    /// <remarks>
+    /// STOR-40 Phase 1: the polling worker runs outside any HTTP request, so the ambient
+    /// account is never populated by the middleware. The EF Core global query filter, the
+    /// <see cref="Persistence.Interceptors.RowLevelSecurityInterceptor"/> save-time guard,
+    /// and the Postgres RLS policy all key on the ambient account — running them with
+    /// <c>AccountId = null</c> hides every <c>Pending</c> row from the claim SELECT and
+    /// trips the save-time guard the moment we try to write findings. We bracket this
+    /// method with two scopes, sequential not nested: the system scope covers the claim
+    /// SELECT/UPDATE only; once we have a job, we close the system scope and reopen under
+    /// <c>BeginAccountScope(job.AccountId)</c> for the rest.
+    /// </remarks>
     public async Task<BackgroundJobTickOutcome> TryProcessOneAsync(CancellationToken cancellationToken)
     {
-        // Step 1: atomically claim one Pending job of our type by flipping it to
-        // Running. On Postgres, ExecuteUpdateAsync emits a single UPDATE ... WHERE
-        // Status = 'Pending' AND Type = 'AnalyzePortfolioItem' with the LIMIT-by-
-        // OrderBy applied to the matched rows; the returned rowCount is the
-        // number of rows the UPDATE actually changed. Two concurrent ticks racing
-        // on the same job see exactly one rowCount == 1, the other rowCount == 0.
-        // The InMemory provider (used by the unit-test suite) doesn't support
-        // ExecuteUpdateAsync — fall back to a load-then-update pattern that
-        // exercises the same "Pending -> Running" state machine for the test
-        // path. Production semantics still rely on the Postgres atomic UPDATE.
-        var nowUtc = _timeProvider.GetUtcNow().UtcDateTime;
+        // The InMemory branch keeps its own claim mechanics (synchronous
+        // SaveChanges inside a static lock) and runs the per-account work under
+        // the same BeginAccountScope at the end of this method — same plumbing,
+        // two different code paths.
         var isInMemoryProvider = _dbContext.Database.ProviderName?.Contains("InMemory", StringComparison.OrdinalIgnoreCase) == true;
 
-        if (isInMemoryProvider)
+        // Step 1: claim under the system scope. The scope's IsAdministrator = true
+        // short-circuits the EF global query filter; the RLS interceptor writes
+        // app.is_admin=true on every command so the Postgres policy's USING clause
+        // matches every row. Once we know which job (if any) was claimed we exit
+        // the scope and run the per-account work under BeginAccountScope.
+        Job? job = null;
+        BackgroundJobTickOutcome claimOutcome;
+        DateTime nowUtc;
+
+        using (_accountScope.BeginSystemScope())
         {
-            return await TryProcessOneAsyncInMemoryAsync(nowUtc, cancellationToken).ConfigureAwait(false);
+            nowUtc = _timeProvider.GetUtcNow().UtcDateTime;
+            if (isInMemoryProvider)
+            {
+                (claimOutcome, job) = await ClaimOneInMemoryAsync(nowUtc).ConfigureAwait(false);
+            }
+            else
+            {
+                (claimOutcome, job) = await ClaimOnePostgresAsync(nowUtc, cancellationToken).ConfigureAwait(false);
+            }
         }
 
+        if (claimOutcome != BackgroundJobTickOutcome.Processed || job is null)
+        {
+            return claimOutcome;
+        }
+
+        // Step 2: post-claim work (item load, LLM call, findings write, status
+        // updates) all runs under the owning account's scope so the global query
+        // filter, save-time guard, and RLS policy all key on the correct
+        // account. The scope restores the prior ambient context on dispose,
+        // including on exceptions.
+        using (_accountScope.BeginAccountScope(job.AccountId))
+        {
+            return await CompleteProcessingOrRollForwardAsync(job, nowUtc, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Atomic Postgres claim: select one Pending row, then flip it to Running via a
+    /// single <c>UPDATE ... WHERE Status = 'Pending'</c>. Returns <c>(NoWork, null)</c>
+    /// when no Pending row is visible and <c>(ClaimedByAnother, null)</c> when a
+    /// concurrent tick beat us to it; <c>(Processed, job)</c> otherwise. Mirrors the
+    /// pre-Phase-1 branch verbatim — see the inline comment block in
+    /// <see cref="TryProcessOneAsync"/>'s older revision for the full reasoning.
+    /// </summary>
+    private async Task<(BackgroundJobTickOutcome Outcome, Job? Job)> ClaimOnePostgresAsync(
+        DateTime nowUtc,
+        CancellationToken cancellationToken)
+    {
         var pendingJobId = await _dbContext.Jobs
             .Where(job => job.Type == PortfolioJobTypes.AnalyzePortfolioItem && job.Status == JobStatus.Pending)
             .OrderBy(job => job.CreatedAt)
@@ -116,7 +208,7 @@ public sealed class PortfolioAnalysisJobProcessor : IBackgroundJobProcessor
 
         if (pendingJobId == Guid.Empty)
         {
-            return BackgroundJobTickOutcome.NoWork;
+            return (BackgroundJobTickOutcome.NoWork, null);
         }
 
         var claimedRows = await _dbContext.Jobs
@@ -133,41 +225,26 @@ public sealed class PortfolioAnalysisJobProcessor : IBackgroundJobProcessor
 
         if (claimedRows == 0)
         {
-            return BackgroundJobTickOutcome.ClaimedByAnother;
+            return (BackgroundJobTickOutcome.ClaimedByAnother, null);
         }
 
-        // Step 2: load the claimed job with its payload. The first SaveChanges
-        // (above) cleared the change tracker, so this fresh read reflects the
-        // post-claim state.
         var job = await _dbContext.Jobs
             .AsNoTracking()
             .FirstAsync(j => j.Id == pendingJobId, cancellationToken)
             .ConfigureAwait(false);
 
-        return await CompleteProcessingOrRollForwardAsync(job, nowUtc, cancellationToken).ConfigureAwait(false);
+        return (BackgroundJobTickOutcome.Processed, job);
     }
 
     /// <summary>
-    /// The unit-test-only claim path. Mirrors the Postgres "claim one Pending
-    /// job to Running, return ClaimedByAnother if already Running" semantics
-    /// using a load-then-recheck pattern that the InMemory provider supports.
-    /// Production ticks (the real Postgres path) never call this — see the
-    /// production branch above.
+    /// InMemory-only claim. The unit-test path uses EF InMemory, which doesn't
+    /// support <c>ExecuteUpdateAsync</c> — fall back to a load-then-recheck pattern
+    /// serialized through <see cref="InMemoryClaimLock"/>. The system scope's
+    /// IsAdministrator short-circuit makes the EF filter a no-op so the InMemory
+    /// load sees every Pending row (the same way Postgres sees them under the
+    /// system scope's GUCs).
     /// </summary>
-    /// <remarks>
-    /// The claim itself is wrapped in <see cref="InMemoryClaimLock"/> — a
-    /// static monitor that serializes the "load candidate -> recheck -> flip to
-    /// Running" sequence across concurrent InMemory ticks. The InMemory provider
-    /// is in-process and single-threaded for the load + recheck window, but the
-    /// await points in <see cref="FirstOrDefaultAsync"/> let another tick slip
-    /// through. The static lock compensates for that without affecting the
-    /// production Postgres path (which has its own atomic UPDATE WHERE).
-    /// </remarks>
-    private static readonly object InMemoryClaimLock = new();
-
-    private async Task<BackgroundJobTickOutcome> TryProcessOneAsyncInMemoryAsync(
-        DateTime nowUtc,
-        CancellationToken cancellationToken)
+    private Task<(BackgroundJobTickOutcome Outcome, Job? Job)> ClaimOneInMemoryAsync(DateTime nowUtc)
     {
         Job? job;
         BackgroundJobTickOutcome outcome;
@@ -175,10 +252,6 @@ public sealed class PortfolioAnalysisJobProcessor : IBackgroundJobProcessor
         {
             _dbContext.ChangeTracker.Clear();
 
-            // Load oldest Pending, then re-check the row's Status right before
-            // saving. The two-step read inside the lock acts as a compare-and-
-            // swap: if another tick already flipped the row to Running, our
-            // second read sees the new status and we bail with ClaimedByAnother.
             var candidate = _dbContext.Jobs
                 .Where(j => j.Type == PortfolioJobTypes.AnalyzePortfolioItem && j.Status == JobStatus.Pending)
                 .OrderBy(j => j.CreatedAt)
@@ -186,12 +259,9 @@ public sealed class PortfolioAnalysisJobProcessor : IBackgroundJobProcessor
 
             if (candidate is null)
             {
-                return BackgroundJobTickOutcome.NoWork;
+                return Task.FromResult((BackgroundJobTickOutcome.NoWork, (Job?)null));
             }
 
-            // Recheck inside the lock — if a prior tick committed its flip,
-            // the row no longer matches the Pending filter and we treat that as
-            // the row already being claimed by someone else.
             var recheck = _dbContext.Jobs
                 .AsNoTracking()
                 .Where(j => j.Id == candidate.Id && j.Status == JobStatus.Pending)
@@ -200,31 +270,33 @@ public sealed class PortfolioAnalysisJobProcessor : IBackgroundJobProcessor
 
             if (recheck is null)
             {
-                outcome = BackgroundJobTickOutcome.ClaimedByAnother;
-                job = null;
+                return Task.FromResult((BackgroundJobTickOutcome.ClaimedByAnother, (Job?)null));
             }
-            else
-            {
-                candidate.Status = JobStatus.Running;
-                candidate.StartedAt = nowUtc;
-                candidate.UpdatedAt = nowUtc;
-                _dbContext.SaveChanges();
 
-                job = _dbContext.Jobs
-                    .AsNoTracking()
-                    .First(j => j.Id == candidate.Id);
-                outcome = BackgroundJobTickOutcome.Processed;
-            }
-        }
+            candidate.Status = JobStatus.Running;
+            candidate.StartedAt = nowUtc;
+            candidate.UpdatedAt = nowUtc;
+            _dbContext.SaveChanges();
 
-        if (outcome == BackgroundJobTickOutcome.ClaimedByAnother)
-        {
-            return BackgroundJobTickOutcome.ClaimedByAnother;
+            job = _dbContext.Jobs
+                .AsNoTracking()
+                .First(j => j.Id == candidate.Id);
+            outcome = BackgroundJobTickOutcome.Processed;
         }
 
         _dbContext.ChangeTracker.Clear();
-        return await CompleteProcessingOrRollForwardAsync(job!, nowUtc, cancellationToken).ConfigureAwait(false);
+        return Task.FromResult((outcome, (Job?)job));
     }
+
+    /// <summary>
+    /// Static monitor that serializes the "load candidate -> recheck -> flip to
+    /// Running" sequence the InMemory branch uses. The InMemory provider is
+    /// in-process and single-threaded for the load + recheck window, but the
+    /// await points in <see cref="FirstOrDefaultAsync"/> let another tick slip
+    /// through; the static lock compensates for that without affecting the
+    /// production Postgres path (which has its own atomic UPDATE WHERE).
+    /// </summary>
+    private static readonly object InMemoryClaimLock = new();
 
     private async Task<BackgroundJobTickOutcome> CompleteProcessingOrRollForwardAsync(
         Job job,
@@ -357,6 +429,13 @@ public sealed class PortfolioAnalysisJobProcessor : IBackgroundJobProcessor
             return;
         }
 
+        // The new shared LlmJsonExtractor is more forgiving than the old
+        // private ExtractJsonArraySlice — it skips brackets that appear inside
+        // string values, which the local Gemma reasoning model sometimes
+        // emits. The portfolio analyzer still expects exactly an array, so we
+        // branch on the slice kind here rather than letting the serializer
+        // guess.
+
         // Replace any prior findings for this item — a successful analysis
         // overwrites, it doesn't append. The Phase 2 worker's "delete prior +
         // insert new" choice keeps the table small and avoids a separate
@@ -439,13 +518,22 @@ public sealed class PortfolioAnalysisJobProcessor : IBackgroundJobProcessor
             throw new JsonException("LLM returned an empty response body.");
         }
 
-        // Defensive trim: a reasoning model that leaves a leading reasoning-trace
-        // prefix can break the strict-JSON contract. We try the raw string first;
-        // on failure, attempt to trim the leading prose up to the first '[' and
-        // retry once. This is the cheapest possible repair for a known Gemma quirk.
-        var trimmed = ExtractJsonArraySlice(outputText);
+        // STOR-40: route the LLM output through the shared, string-aware
+        // LlmJsonExtractor so brackets that appear inside string values
+        // (a known quirk of the local Gemma reasoning model) do not end
+        // the slice early. The portfolio analyzer expects an array;
+        // the advisor will expect an object — LlmJsonExtractor reports the
+        // kind so each caller can deserialize with the matching shape.
+        var slice = LlmJsonExtractor.ExtractJsonDocument(outputText)
+            ?? throw new JsonException("LLM output contained no JSON array.");
 
-        var parsed = JsonSerializer.Deserialize<List<PortfolioSkillFindingDto>>(trimmed, JsonOptions)
+        if (slice.Kind != ExtractedJsonDocumentKind.Array)
+        {
+            throw new JsonException(
+                $"LLM output was a JSON object; the portfolio analyzer requires an array. Got: {slice.Text[..Math.Min(slice.Text.Length, 64)]}...");
+        }
+
+        var parsed = JsonSerializer.Deserialize<List<PortfolioSkillFindingDto>>(slice.Text, JsonOptions)
             ?? throw new JsonException("LLM returned a JSON null body.");
 
         // Validate required fields are non-empty (the JSON serializer would
@@ -462,46 +550,6 @@ public sealed class PortfolioAnalysisJobProcessor : IBackgroundJobProcessor
         }
 
         return parsed;
-    }
-
-    /// <summary>
-    /// If the model wraps its JSON array in stray prose (a known quirk of the
-    /// local reasoning model when its output budget is tight), strip everything
-    /// before the first <c>[</c> and after the last matching <c>]</c> so the
-    /// serializer only sees the array slice.
-    /// </summary>
-    private static string ExtractJsonArraySlice(string output)
-    {
-        var firstBracket = output.IndexOf('[');
-        if (firstBracket < 0)
-        {
-            return output;
-        }
-
-        // Find the matching closing bracket by scanning forward with a depth
-        // counter so a nested object inside the array doesn't terminate early.
-        var depth = 0;
-        var lastBracket = -1;
-        for (var i = firstBracket; i < output.Length; i++)
-        {
-            if (output[i] == '[')
-            {
-                depth++;
-            }
-            else if (output[i] == ']')
-            {
-                depth--;
-                if (depth == 0)
-                {
-                    lastBracket = i;
-                    break;
-                }
-            }
-        }
-
-        return lastBracket > firstBracket
-            ? output[firstBracket..(lastBracket + 1)]
-            : output;
     }
 
     private static bool IsKnownBand(string band) =>

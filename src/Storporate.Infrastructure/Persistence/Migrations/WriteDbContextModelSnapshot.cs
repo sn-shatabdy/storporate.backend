@@ -87,6 +87,204 @@ namespace Storporate.Infrastructure.Persistence.Migrations
                     b.ToTable("AuditLogEntries", (string)null);
                 });
 
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.Exploration", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId");
+
+                    b.HasIndex("AccountId", "UpdatedAt");
+
+                    b.ToTable("Explorations", (string)null);
+                });
+
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.ExplorationComparison", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("FirstExplorationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ResultText")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("SecondExplorationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId");
+
+                    b.HasIndex("FirstExplorationId");
+
+                    b.HasIndex("SecondExplorationId");
+
+                    b.HasIndex("AccountId", "CreatedAt");
+
+                    b.ToTable("ExplorationComparisons", (string)null);
+                });
+
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.ExplorationMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ExplorationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("QuestionsJson")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId");
+
+                    b.HasIndex("ExplorationId", "CreatedAt");
+
+                    b.ToTable("ExplorationMessages", (string)null);
+                });
+
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.ExplorationSummaryVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ChangeNote")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ExplorationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("GapsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("SuggestionsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<int>("VersionNumber")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId");
+
+                    b.HasIndex("ExplorationId", "VersionNumber")
+                        .IsUnique();
+
+                    b.ToTable("ExplorationSummaryVersions", (string)null);
+                });
+
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.FeedItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("FetchedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("PublishedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("SourceName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("SourceUrl")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<string>("Summary")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("Url")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Url")
+                        .IsUnique();
+
+                    b.HasIndex("PublishedAt", "FetchedAt");
+
+                    b.ToTable("FeedItems", (string)null);
+                });
+
             modelBuilder.Entity("Storporate.SharedKernel.Entities.Job", b =>
                 {
                     b.Property<Guid>("Id")
@@ -324,6 +522,69 @@ namespace Storporate.Infrastructure.Persistence.Migrations
                     b.ToTable("Sessions", (string)null);
                 });
 
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.StudentContextNote", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ExplorationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId");
+
+                    b.HasIndex("ExplorationId");
+
+                    b.HasIndex("AccountId", "CreatedAt");
+
+                    b.ToTable("StudentContextNotes", (string)null);
+                });
+
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.StudentFeedEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("FeedItemId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("MatchedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId");
+
+                    b.HasIndex("FeedItemId");
+
+                    b.HasIndex("AccountId", "FeedItemId")
+                        .IsUnique();
+
+                    b.ToTable("StudentFeedEntries", (string)null);
+                });
+
             modelBuilder.Entity("Storporate.SharedKernel.Entities.User", b =>
                 {
                     b.Property<Guid>("Id")
@@ -361,6 +622,82 @@ namespace Storporate.Infrastructure.Persistence.Migrations
                         .HasFilter("\"GoogleSubjectId\" IS NOT NULL");
 
                     b.ToTable("Users", (string)null);
+                });
+
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.Exploration", b =>
+                {
+                    b.HasOne("Storporate.SharedKernel.Entities.User", "Account")
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Account");
+                });
+
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.ExplorationComparison", b =>
+                {
+                    b.HasOne("Storporate.SharedKernel.Entities.User", "Account")
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Storporate.SharedKernel.Entities.Exploration", "FirstExploration")
+                        .WithMany()
+                        .HasForeignKey("FirstExplorationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Storporate.SharedKernel.Entities.Exploration", "SecondExploration")
+                        .WithMany()
+                        .HasForeignKey("SecondExplorationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Account");
+
+                    b.Navigation("FirstExploration");
+
+                    b.Navigation("SecondExploration");
+                });
+
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.ExplorationMessage", b =>
+                {
+                    b.HasOne("Storporate.SharedKernel.Entities.User", "Account")
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Storporate.SharedKernel.Entities.Exploration", "Exploration")
+                        .WithMany()
+                        .HasForeignKey("ExplorationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Account");
+
+                    b.Navigation("Exploration");
+                });
+
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.ExplorationSummaryVersion", b =>
+                {
+                    b.HasOne("Storporate.SharedKernel.Entities.User", "Account")
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Storporate.SharedKernel.Entities.Exploration", "Exploration")
+                        .WithMany()
+                        .HasForeignKey("ExplorationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Account");
+
+                    b.Navigation("Exploration");
                 });
 
             modelBuilder.Entity("Storporate.SharedKernel.Entities.Job", b =>
@@ -420,6 +757,43 @@ namespace Storporate.Infrastructure.Persistence.Migrations
                     b.Navigation("ReplacedBySession");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.StudentContextNote", b =>
+                {
+                    b.HasOne("Storporate.SharedKernel.Entities.User", "Account")
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Storporate.SharedKernel.Entities.Exploration", "Exploration")
+                        .WithMany()
+                        .HasForeignKey("ExplorationId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Account");
+
+                    b.Navigation("Exploration");
+                });
+
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.StudentFeedEntry", b =>
+                {
+                    b.HasOne("Storporate.SharedKernel.Entities.User", "Account")
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Storporate.SharedKernel.Entities.FeedItem", "FeedItem")
+                        .WithMany()
+                        .HasForeignKey("FeedItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Account");
+
+                    b.Navigation("FeedItem");
                 });
 #pragma warning restore 612, 618
         }

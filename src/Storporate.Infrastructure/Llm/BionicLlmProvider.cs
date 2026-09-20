@@ -27,10 +27,24 @@ public sealed class BionicLlmProvider : HttpLlmClientBase<BionicChatResponse>
 
     protected override HttpRequestMessage BuildRequest(LlmCompletionRequest request)
     {
+        // Emit messages in the order the OpenAI/Bionic chat API expects: the system
+        // message (when present), every entry of the supplied History list verbatim
+        // (in the order the caller passed them — neither re-ordered nor de-duplicated
+        // here), then the user prompt as the final turn. A null or empty History
+        // collapses to the pre-STOR-40 shape "[system?, user]" so every existing
+        // single-turn caller keeps working without any per-caller wiring change.
         var messages = new List<BionicChatRequestMessage>();
         if (!string.IsNullOrWhiteSpace(request.SystemPrompt))
         {
             messages.Add(new BionicChatRequestMessage("system", request.SystemPrompt));
+        }
+
+        if (request.History is not null)
+        {
+            foreach (var entry in request.History)
+            {
+                messages.Add(new BionicChatRequestMessage(entry.Role, entry.Content));
+            }
         }
 
         messages.Add(new BionicChatRequestMessage("user", request.UserPrompt));

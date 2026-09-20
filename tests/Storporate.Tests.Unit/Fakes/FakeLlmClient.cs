@@ -33,9 +33,10 @@ public sealed class FakeLlmClient : ILlmClient
     private int _callCount;
 
     /// <summary>Every <see cref="CompleteAsync"/> call, in invocation order.
-    /// <see cref="Call.UserPrompt"/>, <see cref="Call.SystemPrompt"/>, and
-    /// <see cref="Call.MaxOutputTokens"/> are recorded verbatim so tests can
-    /// assert exactly what the worker sent to the model.</summary>
+    /// <see cref="Call.UserPrompt"/>, <see cref="Call.SystemPrompt"/>,
+    /// <see cref="Call.MaxOutputTokens"/>, and (for STOR-40 multi-turn callers)
+    /// <see cref="Call.History"/> are recorded verbatim so tests can assert
+    /// exactly what the worker sent to the model.</summary>
     public IReadOnlyList<Call> Calls => _calls;
 
     private readonly List<Call> _calls = new();
@@ -72,7 +73,8 @@ public sealed class FakeLlmClient : ILlmClient
         var call = new Call(
             UserPrompt: request.UserPrompt,
             SystemPrompt: request.SystemPrompt,
-            MaxOutputTokens: request.MaxOutputTokens);
+            MaxOutputTokens: request.MaxOutputTokens,
+            History: request.History);
         _calls.Add(call);
         _callCount++;
 
@@ -108,8 +110,13 @@ public sealed class FakeLlmClient : ILlmClient
         throw exception;
 
     /// <summary>One recorded call to <see cref="ILlmClient.CompleteAsync"/> —
-    /// the three fields the system/user prompt test asserts against are
-    /// captured verbatim so the test's "what was the model actually asked?"
-    /// check has a stable shape.</summary>
-    public sealed record Call(string UserPrompt, string? SystemPrompt, int MaxOutputTokens);
+    /// the user/system/MaxOutputTokens fields the prompt-content test asserts
+    /// against, plus (since STOR-40) the verbatim <see cref="LlmChatMessage"/>
+    /// <see cref="History"/> list, are captured so tests can pin the wire
+    /// payload shape a multi-turn caller built.</summary>
+    public sealed record Call(
+        string UserPrompt,
+        string? SystemPrompt,
+        int MaxOutputTokens,
+        IReadOnlyList<LlmChatMessage>? History);
 }
