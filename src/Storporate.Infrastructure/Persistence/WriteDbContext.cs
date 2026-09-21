@@ -118,6 +118,10 @@ public sealed class WriteDbContext : DbContext
     // accounts; owner scoping is explicit in the club handlers (unique OwnerAccountId).
     public DbSet<ClubProfile> ClubProfiles => Set<ClubProfile>();
 
+    // STOR-70: company sponsorship goal sets. Non-tenant: clubs read Active sets of other
+    // accounts; owner scoping is explicit in the company handlers (OwnerAccountId, not unique).
+    public DbSet<SponsorshipGoalSet> SponsorshipGoalSets => Set<SponsorshipGoalSet>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -147,6 +151,7 @@ public sealed class WriteDbContext : DbContext
         modelBuilder.ApplyConfiguration(new OutreachConversationConfiguration());
         modelBuilder.ApplyConfiguration(new OutreachMessageConfiguration());
         modelBuilder.ApplyConfiguration(new ClubProfileConfiguration());
+        modelBuilder.ApplyConfiguration(new SponsorshipGoalSetConfiguration());
 
         // Global query filter for every IAccountScoped entity type. We walk the model
         // once via reflection to discover which CLR types implement IAccountScoped,
