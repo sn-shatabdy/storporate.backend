@@ -69,6 +69,8 @@ public sealed class GlobalExceptionHandler(
                 (StatusCodes.Status400BadRequest, new ErrorResponse("job_posting_query_invalid", jobPostingQueryInvalidException.Message)),
             Storporate.Modules.DiscoveryHiring.Exceptions.ApplicationAlreadySubmittedException applicationAlreadySubmittedException =>
                 (StatusCodes.Status409Conflict, new ErrorResponse("application_already_submitted", applicationAlreadySubmittedException.Message)),
+            Storporate.Modules.DiscoveryHiring.Exceptions.ApplicationConflictException applicationConflictException =>
+                (StatusCodes.Status409Conflict, new ErrorResponse("application_conflict", applicationConflictException.Message)),
             Storporate.Modules.DiscoveryHiring.Exceptions.OutreachAwaitingReplyException outreachAwaitingReplyException =>
                 (StatusCodes.Status409Conflict, new ErrorResponse("outreach_awaiting_reply", outreachAwaitingReplyException.Message)),
             Storporate.Modules.DiscoveryHiring.Exceptions.OutreachDeclinedException outreachDeclinedException =>

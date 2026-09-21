@@ -14,7 +14,14 @@ public sealed record ApplicationResponse(
     DateTimeOffset StatusChangedAt,
     string FitLabel);
 
-public sealed record ApplicationListResponse(IReadOnlyList<ApplicationResponse> Items);
+/// <summary>Body of <c>GET /api/discovery/applications</c>: one paged slice of
+/// the caller's own applications (newest first, capped at
+/// <see cref="ManageJobPostingsHandler.MaxEmployerListItems"/>).</summary>
+public sealed record ApplicationListResponse(
+    IReadOnlyList<ApplicationResponse> Items,
+    int Page,
+    int PageSize,
+    int Total);
 
 /// <summary>One shared item in an applicant snapshot: label, category and skill bands only.</summary>
 public sealed record ApplicantItemResponse(
@@ -36,7 +43,14 @@ public sealed record ApplicantResponse(
     IReadOnlyList<ApplicantItemResponse> Items,
     JobFitDetailResponse Fit);
 
-public sealed record ApplicantListResponse(IReadOnlyList<ApplicantResponse> Items);
+/// <summary>Body of <c>GET /api/discovery/job-postings/{id}/applications</c>:
+/// one paged slice of the posting's applicants (newest first, capped at
+/// <see cref="ManageJobPostingsHandler.MaxEmployerListItems"/>).</summary>
+public sealed record ApplicantListResponse(
+    IReadOnlyList<ApplicantResponse> Items,
+    int Page,
+    int PageSize,
+    int Total);
 
 /// <summary>The stored snapshot JSON shape (captured at apply time, never updated).</summary>
 internal sealed record ApplicantSnapshot(

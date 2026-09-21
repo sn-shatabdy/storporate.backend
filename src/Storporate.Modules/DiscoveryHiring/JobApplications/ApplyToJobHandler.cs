@@ -93,14 +93,27 @@ public static class ApplyToJobHandler
     }
 
     public static async Task<ApplicationListResponse> ListOwnAsync(
+        int page,
+        int pageSize,
         Guid accountId,
         WriteDbContext dbContext,
         CancellationToken cancellationToken)
     {
-        var rows = await dbContext.JobApplications
+        var normalizedPage = page < 1 ? 1 : page;
+        var normalizedSize = pageSize < 1
+            ? ManageJobPostingsHandler.DefaultPageSize
+            : Math.Min(pageSize, ManageJobPostingsHandler.MaxEmployerListItems);
+
+        var baseQuery = dbContext.JobApplications
             .AsNoTracking()
-            .Where(a => a.StudentAccountId == accountId)
+            .Where(a => a.StudentAccountId == accountId);
+
+        var total = await baseQuery.CountAsync(cancellationToken).ConfigureAwait(false);
+
+        var rows = await baseQuery
             .OrderByDescending(a => a.CreatedAt)
+            .Skip((normalizedPage - 1) * normalizedSize)
+            .Take(normalizedSize)
             .Select(a => new
             {
                 Application = a,
@@ -111,9 +124,13 @@ public static class ApplyToJobHandler
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return new ApplicationListResponse(rows
-            .Select(r => ToStudentResponse(r.Application, r.Title, r.CompanyName, r.Kind))
-            .ToList());
+        return new ApplicationListResponse(
+            rows
+                .Select(r => ToStudentResponse(r.Application, r.Title, r.CompanyName, r.Kind))
+                .ToList(),
+            normalizedPage,
+            normalizedSize,
+            total);
     }
 
     private static Task<bool> ExistsAsync(

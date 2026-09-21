@@ -2,6 +2,8 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Storporate.Infrastructure.Auditing;
 using Storporate.Infrastructure.Persistence;
+using Storporate.Modules.DiscoveryHiring.Exceptions;
+using Storporate.Modules.DiscoveryHiring.JobPostings;
 using Storporate.SharedKernel.Entities;
 
 namespace Storporate.Modules.DiscoveryHiring.JobApplications;
@@ -30,6 +32,8 @@ public static class ReviewApplicationsHandler
 
     public static async Task<Result<ApplicantListResponse>> ListAsync(
         Guid postingId,
+        int page,
+        int pageSize,
         Guid accountId,
         WriteDbContext dbContext,
         CancellationToken cancellationToken)
@@ -39,13 +43,31 @@ public static class ReviewApplicationsHandler
             return new(null, Failure.PostingNotFound);
         }
 
-        var rows = await dbContext.JobApplications
+        var normalizedPage = page < 1 ? 1 : page;
+        var normalizedSize = pageSize < 1
+            ? ManageJobPostingsHandler.DefaultPageSize
+            : Math.Min(pageSize, ManageJobPostingsHandler.MaxEmployerListItems);
+
+        var baseQuery = dbContext.JobApplications
             .AsNoTracking()
-            .Where(a => a.JobPostingId == postingId)
+            .Where(a => a.JobPostingId == postingId);
+
+        var total = await baseQuery.CountAsync(cancellationToken).ConfigureAwait(false);
+
+        var rows = await baseQuery
             .OrderByDescending(a => a.CreatedAt)
+            .Skip((normalizedPage - 1) * normalizedSize)
+            .Take(normalizedSize)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
-        return new(new ApplicantListResponse(rows.Select(ToApplicant).ToList()), Failure.None);
+
+        return new(
+            new ApplicantListResponse(
+                rows.Select(ToApplicant).ToList(),
+                normalizedPage,
+                normalizedSize,
+                total),
+            Failure.None);
     }
 
     /// <summary>Submitted becomes Viewed as part of this call.</summary>
@@ -115,7 +137,18 @@ public static class ReviewApplicationsHandler
         application.Status = status;
         application.StatusChangedAt = now;
         application.UpdatedAt = now;
-        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Two employer tabs (or a GET-triggered auto-Viewed racing a concurrent
+            // status POST) modified the same row between this caller's read and
+            // write. Surface it as a typed conflict so the global handler maps it
+            // to 409 application_conflict instead of an opaque 500.
+            throw new ApplicationConflictException();
+        }
 
         await auditLogWriter.WriteAsync(
             "job_application_status_changed",

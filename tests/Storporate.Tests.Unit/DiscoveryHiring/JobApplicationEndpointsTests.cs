@@ -158,6 +158,31 @@ public class JobApplicationEndpointsTests : IClassFixture<DiscoveryHiringEndpoin
     }
 
     [Fact]
+    public async Task Apply_ToOpenPostingWithPassedDeadline_Returns409()
+    {
+        // STOR-67 Phase 1 deadline-passed coverage: the deadline check was
+        // inherited from the STOR-66 merge (ApplyToJobHandler.cs ~L42-46) but
+        // had no test. An Open posting with ApplicationDeadline strictly
+        // before today must reject the apply with 409 job_posting_deadline_passed,
+        // even though the posting itself is still Open and visible.
+        var org = await SeedUserAsync(ActorTypes.Organization);
+        var student = await SeedUserAsync(ActorTypes.Student);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var expired = await SeedPostingAsync(org.Id, "Expired Role", applicationDeadline: today.AddDays(-1));
+        var open = await SeedPostingAsync(org.Id, "Open Role", applicationDeadline: today.AddDays(1));
+        using var client = await ClientForAsync(student);
+
+        var rejected = await client.PostAsJsonAsync($"/api/discovery/jobs/{expired.Id}/applications", new { displayName = "Late Student" });
+        Assert.Equal(HttpStatusCode.Conflict, rejected.StatusCode);
+        Assert.Equal("job_posting_deadline_passed", await ErrorCodeAsync(rejected));
+
+        // A future-deadline Open posting on the same seed still accepts — sanity-check that
+        // the rejection above is the deadline and not, e.g., a stray 404 in the chain.
+        Assert.Equal(HttpStatusCode.Created,
+            (await client.PostAsJsonAsync($"/api/discovery/jobs/{open.Id}/applications", new { displayName = "Late Student" })).StatusCode);
+    }
+
+    [Fact]
     public async Task Apply_ToPausedClosedOrUnknownPosting_Returns404()
     {
         var org = await SeedUserAsync(ActorTypes.Organization);
@@ -196,6 +221,49 @@ public class JobApplicationEndpointsTests : IClassFixture<DiscoveryHiringEndpoin
 
         var otherList = await otherClient.GetFromJsonAsync<ApplicationListResponse>("/api/discovery/applications", JsonOptions);
         Assert.Equal(first.Id, Assert.Single(otherList!.Items).JobPostingId);
+    }
+
+    [Fact]
+    public async Task ListOwn_OverTheCap_ReturnsPagedResponseWithTotalExceedingTheCap()
+    {
+        // STOR-67 Phase 1: a student who has applied to more postings than
+        // the per-list cap must still see total == true count and a single
+        // page that respects the requested pageSize; a second page walks
+        // forward from where the first left off with no overlap.
+        var org = await SeedUserAsync(ActorTypes.Organization);
+        var student = await SeedUserAsync(ActorTypes.Student);
+        const int seeded = 120;
+        var firstPosting = await SeedPostingAsync(org.Id, "First Owned Posting");
+
+        // Bulk-insert 120 applications for the same student against 120 distinct postings
+        // so we exercise the full paged walk without going through 120 HTTP POSTs.
+        var postingIds = await SeedManyPostingsAsync(org.Id, seeded);
+        await SeedApplicationsAsync(student.Id, firstPosting, postingIds);
+
+        using var client = await ClientForAsync(student);
+
+        var first = await client.GetFromJsonAsync<ApplicationListResponse>(
+            "/api/discovery/applications?pageSize=20&page=1", JsonOptions);
+        Assert.Equal(20, first!.Items.Count);
+        Assert.Equal(1, first.Page);
+        Assert.Equal(20, first.PageSize);
+        Assert.Equal(seeded + 1, first.Total);
+
+        var second = await client.GetFromJsonAsync<ApplicationListResponse>(
+            "/api/discovery/applications?pageSize=100&page=1", JsonOptions);
+        Assert.Equal(100, second!.Items.Count);
+        Assert.Equal(100, second.PageSize);
+        Assert.Equal(seeded + 1, second.Total);
+
+        var third = await client.GetFromJsonAsync<ApplicationListResponse>(
+            "/api/discovery/applications?pageSize=100&page=2", JsonOptions);
+        Assert.Equal(seeded + 1 - 100, third!.Items.Count);
+        Assert.Equal(2, third.Page);
+
+        // No overlap between pages and the union covers every item.
+        var allReturnedIds = first.Items.Concat(second.Items).Concat(third.Items)
+            .Select(i => i.Id).ToHashSet();
+        Assert.Equal(seeded + 1, allReturnedIds.Count);
     }
 
     [Fact]
@@ -273,6 +341,43 @@ public class JobApplicationEndpointsTests : IClassFixture<DiscoveryHiringEndpoin
 
         // Nothing changed by the intruder.
         Assert.Equal("Submitted", (await GetStatusFromDbAsync(a1.Id)));
+    }
+
+    [Fact]
+    public async Task EmployerList_OverTheCap_ReturnsPagedResponseWithTotalExceedingTheCap()
+    {
+        // STOR-67 Phase 1: a posting with more applicants than the per-list
+        // cap (100) must still report total == true count and serve one page
+        // at a time without overlap. The bulk-seed path keeps the test under
+        // a few hundred milliseconds.
+        var org = await SeedUserAsync(ActorTypes.Organization);
+        var posting = await SeedPostingAsync(org.Id, "Big Applicant Pool");
+        const int seeded = 120;
+        await SeedManyApplicantsAsync(posting.Id, seeded);
+
+        using var orgClient = await ClientForAsync(org);
+
+        var first = await orgClient.GetFromJsonAsync<ApplicantListResponse>(
+            $"/api/discovery/job-postings/{posting.Id}/applications?pageSize=20&page=1", JsonOptions);
+        Assert.Equal(20, first!.Items.Count);
+        Assert.Equal(1, first.Page);
+        Assert.Equal(20, first.PageSize);
+        Assert.Equal(seeded, first.Total);
+
+        var second = await orgClient.GetFromJsonAsync<ApplicantListResponse>(
+            $"/api/discovery/job-postings/{posting.Id}/applications?pageSize=100&page=1", JsonOptions);
+        Assert.Equal(100, second!.Items.Count);
+        Assert.Equal(100, second.PageSize);
+        Assert.Equal(seeded, second.Total);
+
+        var third = await orgClient.GetFromJsonAsync<ApplicantListResponse>(
+            $"/api/discovery/job-postings/{posting.Id}/applications?pageSize=100&page=2", JsonOptions);
+        Assert.Equal(seeded - 100, third!.Items.Count);
+        Assert.Equal(2, third.Page);
+
+        var allReturnedIds = first.Items.Concat(second.Items).Concat(third.Items)
+            .Select(i => i.Id).ToHashSet();
+        Assert.Equal(seeded, allReturnedIds.Count);
     }
 
     [Fact]
@@ -521,7 +626,8 @@ public class JobApplicationEndpointsTests : IClassFixture<DiscoveryHiringEndpoin
         string title,
         string kind = "Job",
         string status = "Open",
-        string[]? skills = null)
+        string[]? skills = null,
+        DateOnly? applicationDeadline = null)
     {
         using var scope = _factory.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<WriteDbContext>();
@@ -539,6 +645,7 @@ public class JobApplicationEndpointsTests : IClassFixture<DiscoveryHiringEndpoin
             RequiredSkillsJson = JobPostingSkills.Serialize(normalizedSkills),
             SearchText = JobPostingSkills.BuildSearchText(title, "Seed Co", location: null, normalizedSkills),
             Status = status,
+            ApplicationDeadline = applicationDeadline,
             CreatedAt = now,
             UpdatedAt = now,
             ClosedAt = status == "Closed" ? now : null,
@@ -546,6 +653,125 @@ public class JobApplicationEndpointsTests : IClassFixture<DiscoveryHiringEndpoin
         dbContext.JobPostings.Add(posting);
         await dbContext.SaveChangesAsync();
         return posting;
+    }
+
+    /// <summary>Seeds <paramref name="count"/> Open postings under a single owner so a
+    /// single student can fan out applications across many distinct postings at once.
+    /// Returns the new posting ids in insertion order (newest last = longest-Lived first).</summary>
+    private async Task<List<Guid>> SeedManyPostingsAsync(Guid ownerId, int count)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<WriteDbContext>();
+        var baseTime = DateTimeOffset.UtcNow.AddMinutes(-count);
+        var ids = new List<Guid>(count);
+        for (var i = 0; i < count; i++)
+        {
+            var id = Guid.NewGuid();
+            ids.Add(id);
+            dbContext.JobPostings.Add(new JobPosting
+            {
+                Id = id,
+                OwnerAccountId = ownerId,
+                Title = $"Bulk Posting #{i:000}",
+                Kind = "Job",
+                CompanyName = "Seed Co",
+                WorkMode = "Hybrid",
+                Description = "Bulk-seeded posting for paging tests.",
+                RequiredSkillsJson = JobPostingSkills.Serialize(new[] { "C#" }),
+                SearchText = JobPostingSkills.BuildSearchText($"bulk posting {i:000}", "Seed Co", null, new[] { "C#" }),
+                Status = "Open",
+                CreatedAt = baseTime.AddMinutes(i),
+                UpdatedAt = baseTime.AddMinutes(i),
+            });
+        }
+
+        await dbContext.SaveChangesAsync();
+        return ids;
+    }
+
+    /// <summary>The minimum well-formed <see cref="JobApplication.SnapshotJson"/> body. The
+    /// listing handlers call <c>ApplyToJobHandler.ReadSnapshot</c> and dereference
+    /// <c>fit.label</c>, so even paged-unit-test fixtures must populate <c>items</c>
+    /// and <c>fit</c> rather than passing <c>{}</c>.</summary>
+    private const string FilledSnapshotJson =
+        @"{""displayName"":""Bulk Student"",""items"":[],""fit"":{""label"":""Not yet"",""matched"":[],""missing"":[]}}";
+
+    /// <summary>Seeds one <see cref="JobApplication"/> per posting id, against the same
+    /// student; walks <paramref name="postingIds"/> in insertion order so the
+    /// newest-first ordering keeps the highest ids first when the page query runs.</summary>
+    private async Task SeedApplicationsAsync(Guid studentId, JobPosting extraPosting, List<Guid> postingIds)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<WriteDbContext>();
+        SetStudentScope(scope, studentId);
+        var now = DateTimeOffset.UtcNow;
+        dbContext.JobApplications.Add(new JobApplication
+        {
+            Id = Guid.NewGuid(),
+            JobPostingId = extraPosting.Id,
+            StudentAccountId = studentId,
+            Status = JobApplicationStatuses.Submitted,
+            SnapshotJson = FilledSnapshotJson,
+            CreatedAt = now.AddMinutes(-1),
+            UpdatedAt = now.AddMinutes(-1),
+            StatusChangedAt = now.AddMinutes(-1),
+        });
+        for (var i = 0; i < postingIds.Count; i++)
+        {
+            dbContext.JobApplications.Add(new JobApplication
+            {
+                Id = Guid.NewGuid(),
+                JobPostingId = postingIds[i],
+                StudentAccountId = studentId,
+                Status = JobApplicationStatuses.Submitted,
+                SnapshotJson = FilledSnapshotJson,
+                CreatedAt = now.AddMinutes(-(i + 2)),
+                UpdatedAt = now.AddMinutes(-(i + 2)),
+                StatusChangedAt = now.AddMinutes(-(i + 2)),
+            });
+        }
+
+        await dbContext.SaveChangesAsync();
+    }
+
+    /// <summary>Bulk-seeds one <see cref="User"/> (Student) per index and one
+    /// <see cref="JobApplication"/> for each, all against the same posting, so a
+    /// single employer listing returns a count over the
+    /// <see cref="ManageJobPostingsHandler.MaxEmployerListItems"/> cap.</summary>
+    private async Task<List<Guid>> SeedManyApplicantsAsync(Guid postingId, int count)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<WriteDbContext>();
+        var baseTime = DateTimeOffset.UtcNow.AddMinutes(-count);
+        var ids = new List<Guid>(count);
+        for (var i = 0; i < count; i++)
+        {
+            var studentId = Guid.NewGuid();
+            ids.Add(studentId);
+            dbContext.Users.Add(new User
+            {
+                Id = studentId,
+                Email = $"applicant-{Guid.NewGuid():N}@example.com",
+                ActorType = ActorTypes.Student,
+                VerificationStatus = VerificationStatuses.Verified,
+                CreatedAt = baseTime.AddMinutes(i).UtcDateTime,
+                UpdatedAt = baseTime.AddMinutes(i).UtcDateTime,
+            });
+            dbContext.JobApplications.Add(new JobApplication
+            {
+                Id = Guid.NewGuid(),
+                JobPostingId = postingId,
+                StudentAccountId = studentId,
+                Status = JobApplicationStatuses.Submitted,
+                SnapshotJson = FilledSnapshotJson,
+                CreatedAt = baseTime.AddMinutes(i),
+                UpdatedAt = baseTime.AddMinutes(i),
+                StatusChangedAt = baseTime.AddMinutes(i),
+            });
+        }
+
+        await dbContext.SaveChangesAsync();
+        return ids;
     }
 
     private static void SetStudentScope(IServiceScope scope, Guid studentId)
