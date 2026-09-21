@@ -526,6 +526,7 @@ public class JobApplicationEndpointsTests : IClassFixture<DiscoveryHiringEndpoin
         using var scope = _factory.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<WriteDbContext>();
         var now = DateTimeOffset.UtcNow;
+        var normalizedSkills = skills ?? new[] { "C#" };
         var posting = new JobPosting
         {
             Id = Guid.NewGuid(),
@@ -535,7 +536,8 @@ public class JobApplicationEndpointsTests : IClassFixture<DiscoveryHiringEndpoin
             CompanyName = "Seed Co",
             WorkMode = "Hybrid",
             Description = "Seeded description for the application tests.",
-            RequiredSkillsJson = JobPostingSkills.Serialize(skills ?? new[] { "C#" }),
+            RequiredSkillsJson = JobPostingSkills.Serialize(normalizedSkills),
+            SearchText = JobPostingSkills.BuildSearchText(title, "Seed Co", location: null, normalizedSkills),
             Status = status,
             CreatedAt = now,
             UpdatedAt = now,

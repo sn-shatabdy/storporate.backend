@@ -15,7 +15,7 @@ public sealed class JobPostingConfiguration : IEntityTypeConfiguration<JobPostin
 
         builder.Property(posting => posting.OwnerAccountId).IsRequired();
 
-        builder.Property(posting => posting.Title).IsRequired().HasMaxLength(200);
+        builder.Property(posting => posting.Title).IsRequired().HasMaxLength(120);
         builder.Property(posting => posting.Kind).IsRequired().HasMaxLength(20);
         builder.Property(posting => posting.CompanyName).IsRequired().HasMaxLength(150);
         builder.Property(posting => posting.Location).HasMaxLength(150);
@@ -32,6 +32,13 @@ public sealed class JobPostingConfiguration : IEntityTypeConfiguration<JobPostin
         builder.Property(posting => posting.UpdatedAt).IsRequired();
         builder.Property(posting => posting.ClosedAt);
 
+        builder.Property(posting => posting.ApplicationDeadline).HasColumnType("date");
+        builder.Property(posting => posting.Openings).IsRequired().HasDefaultValue(1);
+        builder.Property(posting => posting.CompensationMin);
+        builder.Property(posting => posting.CompensationMax);
+        builder.Property(posting => posting.ShowCompensation).IsRequired().HasDefaultValue(false);
+        builder.Property(posting => posting.SearchText).IsRequired().HasColumnType("text").HasDefaultValue(string.Empty);
+
         builder.HasOne(posting => posting.Owner)
             .WithMany()
             .HasForeignKey(posting => posting.OwnerAccountId)
@@ -39,5 +46,17 @@ public sealed class JobPostingConfiguration : IEntityTypeConfiguration<JobPostin
 
         builder.HasIndex(posting => posting.OwnerAccountId);
         builder.HasIndex(posting => new { posting.Status, posting.CreatedAt });
+
+        // Postgres xmin is a system column that increments on every UPDATE. Mapping it as a
+        // concurrency token gives read-modify-write protection at the row level: the second
+        // writer's SaveChanges throws DbUpdateConcurrencyException when its loaded token no
+        // longer matches the live row. The mapping is harmless under the InMemory provider
+        // (EF never reads xmin there) — endpoint tests still pass; live Postgres tests prove
+        // the second-writer path.
+        builder.Property<uint>("xmin")
+            .HasColumnName("xmin")
+            .HasColumnType("xid")
+            .ValueGeneratedOnAddOrUpdate()
+            .IsConcurrencyToken();
     }
 }

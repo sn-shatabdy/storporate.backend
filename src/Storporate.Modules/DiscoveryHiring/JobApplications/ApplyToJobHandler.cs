@@ -39,6 +39,12 @@ public static class ApplyToJobHandler
             return null;
         }
 
+        var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+        if (posting.ApplicationDeadline.HasValue && posting.ApplicationDeadline.Value < today)
+        {
+            throw new JobPostingDeadlinePassedException();
+        }
+
         if (await ExistsAsync(dbContext, jobId, accountId, cancellationToken).ConfigureAwait(false))
         {
             throw new ApplicationAlreadySubmittedException();

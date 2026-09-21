@@ -31,6 +31,27 @@ public sealed class JobPosting
 
     public required string Status { get; set; }
 
+    /// <summary>Optional last day students can apply, evaluated in UTC at read time.</summary>
+    public DateOnly? ApplicationDeadline { get; set; }
+
+    /// <summary>How many openings the employer wants to fill (default 1).</summary>
+    public int Openings { get; set; }
+
+    /// <summary>Lower bound of the monthly pay in Bangladeshi taka.</summary>
+    public int? CompensationMin { get; set; }
+
+    /// <summary>Upper bound of the monthly pay in Bangladeshi taka.</summary>
+    public int? CompensationMax { get; set; }
+
+    /// <summary>True when the employer opts to show the pay to students.</summary>
+    public bool ShowCompensation { get; set; }
+
+    /// <summary>
+    /// Lower-case, punctuation-normalized searchable text: title + company name + location +
+    /// the normalized skill names joined by single spaces. Maintained on every write.
+    /// </summary>
+    public string SearchText { get; set; } = string.Empty;
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset UpdatedAt { get; set; }

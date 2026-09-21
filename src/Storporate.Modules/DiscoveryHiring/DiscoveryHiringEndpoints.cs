@@ -321,11 +321,14 @@ public static class DiscoveryHiringEndpoints
             .RequirePermission(Permissions.JobPostings.Manage);
 
         app.MapGet("/api/discovery/job-postings", async (
+                string? status,
+                string? q,
                 WriteDbContext dbContext,
                 IAccountContext accountContext,
+                TimeProvider timeProvider,
                 CancellationToken cancellationToken) =>
                 Results.Ok(await ManageJobPostingsHandler.ListAsync(
-                    AccountOf(accountContext), dbContext, cancellationToken).ConfigureAwait(false)))
+                    status, q, AccountOf(accountContext), dbContext, timeProvider, cancellationToken).ConfigureAwait(false)))
             .RequirePermission(Permissions.JobPostings.Manage);
 
         app.MapGet("/api/discovery/job-postings/{id:guid}", async (
@@ -380,8 +383,12 @@ public static class DiscoveryHiringEndpoints
                 string? kind,
                 string? workMode,
                 string? q,
+                string? sort,
+                int? page,
+                int? pageSize,
                 WriteDbContext dbContext,
                 IAccountContext accountContext,
+                TimeProvider timeProvider,
                 CancellationToken cancellationToken) =>
             {
                 if (!string.IsNullOrWhiteSpace(kind) && !JobPostingKinds.All.Contains(kind))
@@ -397,7 +404,8 @@ public static class DiscoveryHiringEndpoints
                 }
 
                 return Results.Ok(await BrowseJobsHandler.ListAsync(
-                    kind, workMode, q, AccountOf(accountContext), dbContext, cancellationToken).ConfigureAwait(false));
+                    kind, workMode, q, sort, page, pageSize,
+                    AccountOf(accountContext), dbContext, timeProvider, cancellationToken).ConfigureAwait(false));
             })
             .RequirePermission(Permissions.JobPostings.Read);
 
@@ -405,9 +413,11 @@ public static class DiscoveryHiringEndpoints
                 Guid id,
                 WriteDbContext dbContext,
                 IAccountContext accountContext,
+                TimeProvider timeProvider,
                 CancellationToken cancellationToken) =>
             {
-                var response = await BrowseJobsHandler.GetAsync(id, AccountOf(accountContext), dbContext, cancellationToken)
+                var response = await BrowseJobsHandler.GetAsync(
+                    id, AccountOf(accountContext), dbContext, timeProvider, cancellationToken)
                     .ConfigureAwait(false);
                 return response is null ? NotFoundBody() : Results.Ok(response);
             })
