@@ -8,6 +8,7 @@ using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.InstitutionalClubNetwork.ClubProfiles;
 using Storporate.Modules.InstitutionalClubNetwork.SponsorshipGoals;
 using Storporate.Modules.InstitutionalClubNetwork.SponsorshipMatching;
+using Storporate.Modules.InstitutionalClubNetwork.SponsorshipRequests;
 using Storporate.SharedKernel.Authorization;
 using Storporate.SharedKernel.Entities;
 
@@ -18,7 +19,8 @@ namespace Storporate.Modules.InstitutionalClubNetwork;
 /// companies browse Published profiles (<c>club-profile:read</c>). STOR-70 endpoints: the company
 /// manages its own sponsorship goal sets (<c>sponsorship-goals:manage</c>) and clubs read the
 /// Active ones (<c>sponsorship-goals:read</c>). STOR-71 endpoints: fit suggestions in both directions
-/// (<c>sponsorship-matches:read</c>). Every endpoint declares
+/// (<c>sponsorship-matches:read</c>). STOR-72 endpoints: sponsorship requests, sent by the club
+/// (<c>sponsorship-requests:send</c>) and answered by the company (<c>sponsorship-requests:respond</c>). Every endpoint declares
 /// <c>.RequirePermission(...)</c>, as enforced by the architecture tests.
 /// </summary>
 public static class InstitutionalClubNetworkEndpoints
@@ -110,6 +112,7 @@ public static class InstitutionalClubNetworkEndpoints
 
         MapSponsorshipGoalEndpoints(app);
         MapSponsorshipMatchEndpoints(app);
+        MapSponsorshipRequestEndpoints(app);
     }
 
     private static void MapSponsorshipGoalEndpoints(WebApplication app)
@@ -293,6 +296,209 @@ public static class InstitutionalClubNetworkEndpoints
                 return outcome.Value is { } value ? Results.Ok(value) : Failure(outcome.ErrorCode!);
             })
             .RequirePermission(Permissions.SponsorshipMatching.Read);
+    }
+
+    private static void MapSponsorshipRequestEndpoints(WebApplication app)
+    {
+        static Guid AccountOf(IAccountContext accountContext) =>
+            accountContext.AccountId ?? accountContext.UserId!.Value;
+
+        static IResult Failure(string errorCode) => errorCode switch
+        {
+            SponsorshipRequestErrors.NotFound => Results.NotFound(BuildErrorBody(
+                errorCode, "The sponsorship request was not found.")),
+            SponsorshipRequestErrors.ClubProfileNotFound => Results.NotFound(BuildErrorBody(
+                errorCode, "Create your club profile before sending a sponsorship request.")),
+            SponsorshipRequestErrors.GoalNotFound => Results.NotFound(BuildErrorBody(
+                errorCode, "The sponsorship goal set was not found.")),
+            SponsorshipRequestErrors.ClubProfileNotPublished => Results.Conflict(BuildErrorBody(
+                errorCode, "Publish your club profile before sending a sponsorship request.")),
+            SponsorshipRequestErrors.Duplicate => Results.Conflict(BuildErrorBody(
+                errorCode, "You already have an open request for this event with this company.")),
+            SponsorshipRequestErrors.Closed => Results.Conflict(BuildErrorBody(
+                errorCode, "This request is closed, so no more messages can be sent.")),
+            SponsorshipRequestErrors.ThreadFull => Results.Conflict(BuildErrorBody(
+                errorCode, "This conversation has reached its message limit.")),
+            SponsorshipRequestErrors.InvalidTransition => Results.Conflict(BuildErrorBody(
+                errorCode, "This request cannot move to that status from where it is now.")),
+            _ => Results.BadRequest(BuildErrorBody(
+                errorCode, "Status must be Sent, Viewed, InDiscussion, Agreed, Declined or Completed.")),
+        };
+
+        static IResult Respond<T>(SponsorshipRequestOutcome<T> outcome, bool created = false)
+            where T : class =>
+            outcome.Value is { } value
+                ? (created ? Results.Json(value, statusCode: StatusCodes.Status201Created) : Results.Ok(value))
+                : Failure(outcome.ErrorCode!);
+
+        // --- Club side (sponsorship-requests:send), always scoped to the caller's own requests ---
+        app.MapPost("/api/sponsorship/requests", async (
+                CreateSponsorshipRequestRequest request,
+                IValidator<CreateSponsorshipRequestRequest> validator,
+                WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
+                IAccountContext accountContext,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                await validator.ValidateAndThrowAsync(request, cancellationToken).ConfigureAwait(false);
+                var outcome = await SponsorshipRequestHandler.CreateAsync(
+                    request, AccountOf(accountContext), dbContext, auditLogWriter, timeProvider, cancellationToken)
+                    .ConfigureAwait(false);
+                return Respond(outcome, created: true);
+            })
+            .RequirePermission(Permissions.SponsorshipRequests.Send);
+
+        app.MapGet("/api/sponsorship/requests/sent", async (
+                string? status,
+                WriteDbContext dbContext,
+                IAccountContext accountContext,
+                CancellationToken cancellationToken) =>
+                Respond(await SponsorshipRequestHandler.ListAsync(
+                    SponsorshipRequestSides.Club, AccountOf(accountContext), status, dbContext, cancellationToken)
+                    .ConfigureAwait(false)))
+            .RequirePermission(Permissions.SponsorshipRequests.Send);
+
+        app.MapGet("/api/sponsorship/requests/sent/{id:guid}", async (
+                Guid id,
+                WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
+                IAccountContext accountContext,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+                Respond(await SponsorshipRequestHandler.GetAsync(
+                    SponsorshipRequestSides.Club, id, AccountOf(accountContext), dbContext, auditLogWriter, timeProvider, cancellationToken)
+                    .ConfigureAwait(false)))
+            .RequirePermission(Permissions.SponsorshipRequests.Send);
+
+        app.MapPost("/api/sponsorship/requests/sent/{id:guid}/messages", async (
+                Guid id,
+                SendSponsorshipMessageRequest request,
+                IValidator<SendSponsorshipMessageRequest> validator,
+                WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
+                IAccountContext accountContext,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                await validator.ValidateAndThrowAsync(request, cancellationToken).ConfigureAwait(false);
+                return Respond(
+                    await SponsorshipRequestHandler.SendMessageAsync(
+                        SponsorshipRequestSides.Club, id, AccountOf(accountContext), request, dbContext, auditLogWriter, timeProvider, cancellationToken)
+                        .ConfigureAwait(false),
+                    created: true);
+            })
+            .RequirePermission(Permissions.SponsorshipRequests.Send);
+
+        app.MapPost("/api/sponsorship/requests/sent/{id:guid}/complete", async (
+                Guid id,
+                CompleteSponsorshipRequestRequest request,
+                IValidator<CompleteSponsorshipRequestRequest> validator,
+                WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
+                IAccountContext accountContext,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                await validator.ValidateAndThrowAsync(request, cancellationToken).ConfigureAwait(false);
+                return Respond(await SponsorshipRequestHandler.CompleteAsync(
+                    SponsorshipRequestSides.Club, id, AccountOf(accountContext), request, dbContext, auditLogWriter, timeProvider, cancellationToken)
+                    .ConfigureAwait(false));
+            })
+            .RequirePermission(Permissions.SponsorshipRequests.Send);
+
+        // --- Company side (sponsorship-requests:respond), always scoped to requests received ---
+        app.MapGet("/api/sponsorship/requests/received", async (
+                string? status,
+                WriteDbContext dbContext,
+                IAccountContext accountContext,
+                CancellationToken cancellationToken) =>
+                Respond(await SponsorshipRequestHandler.ListAsync(
+                    SponsorshipRequestSides.Company, AccountOf(accountContext), status, dbContext, cancellationToken)
+                    .ConfigureAwait(false)))
+            .RequirePermission(Permissions.SponsorshipRequests.Respond);
+
+        app.MapGet("/api/sponsorship/requests/received/{id:guid}", async (
+                Guid id,
+                WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
+                IAccountContext accountContext,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+                Respond(await SponsorshipRequestHandler.GetAsync(
+                    SponsorshipRequestSides.Company, id, AccountOf(accountContext), dbContext, auditLogWriter, timeProvider, cancellationToken)
+                    .ConfigureAwait(false)))
+            .RequirePermission(Permissions.SponsorshipRequests.Respond);
+
+        app.MapPost("/api/sponsorship/requests/received/{id:guid}/messages", async (
+                Guid id,
+                SendSponsorshipMessageRequest request,
+                IValidator<SendSponsorshipMessageRequest> validator,
+                WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
+                IAccountContext accountContext,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                await validator.ValidateAndThrowAsync(request, cancellationToken).ConfigureAwait(false);
+                return Respond(
+                    await SponsorshipRequestHandler.SendMessageAsync(
+                        SponsorshipRequestSides.Company, id, AccountOf(accountContext), request, dbContext, auditLogWriter, timeProvider, cancellationToken)
+                        .ConfigureAwait(false),
+                    created: true);
+            })
+            .RequirePermission(Permissions.SponsorshipRequests.Respond);
+
+        app.MapPost("/api/sponsorship/requests/received/{id:guid}/accept", async (
+                Guid id,
+                AcceptSponsorshipRequestRequest request,
+                IValidator<AcceptSponsorshipRequestRequest> validator,
+                WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
+                IAccountContext accountContext,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                await validator.ValidateAndThrowAsync(request, cancellationToken).ConfigureAwait(false);
+                return Respond(await SponsorshipRequestHandler.DecideAsync(
+                    id, AccountOf(accountContext), accept: true, request.Note, dbContext, auditLogWriter, timeProvider, cancellationToken)
+                    .ConfigureAwait(false));
+            })
+            .RequirePermission(Permissions.SponsorshipRequests.Respond);
+
+        app.MapPost("/api/sponsorship/requests/received/{id:guid}/decline", async (
+                Guid id,
+                DeclineSponsorshipRequestRequest request,
+                IValidator<DeclineSponsorshipRequestRequest> validator,
+                WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
+                IAccountContext accountContext,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                await validator.ValidateAndThrowAsync(request, cancellationToken).ConfigureAwait(false);
+                return Respond(await SponsorshipRequestHandler.DecideAsync(
+                    id, AccountOf(accountContext), accept: false, request.Reason, dbContext, auditLogWriter, timeProvider, cancellationToken)
+                    .ConfigureAwait(false));
+            })
+            .RequirePermission(Permissions.SponsorshipRequests.Respond);
+
+        app.MapPost("/api/sponsorship/requests/received/{id:guid}/complete", async (
+                Guid id,
+                CompleteSponsorshipRequestRequest request,
+                IValidator<CompleteSponsorshipRequestRequest> validator,
+                WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
+                IAccountContext accountContext,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                await validator.ValidateAndThrowAsync(request, cancellationToken).ConfigureAwait(false);
+                return Respond(await SponsorshipRequestHandler.CompleteAsync(
+                    SponsorshipRequestSides.Company, id, AccountOf(accountContext), request, dbContext, auditLogWriter, timeProvider, cancellationToken)
+                    .ConfigureAwait(false));
+            })
+            .RequirePermission(Permissions.SponsorshipRequests.Respond);
     }
 
     /// <summary>Standard <c>{ errorCode, message }</c> body; modules must not reference the API project.</summary>

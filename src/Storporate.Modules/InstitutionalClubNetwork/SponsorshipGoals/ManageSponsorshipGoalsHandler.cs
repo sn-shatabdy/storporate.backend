@@ -127,7 +127,7 @@ public static class ManageSponsorshipGoalsHandler
         return ToResponse(set);
     }
 
-    /// <summary>Hard-deletes the caller's own set. Returns false when the caller owns no set with that id.</summary>
+    /// <summary>Hard-deletes the caller's own set; sponsorship requests sent to it stay with a null goal link. Returns false when the caller owns no set with that id.</summary>
     public static async Task<bool> DeleteAsync(
         Guid id,
         Guid accountId,
@@ -140,6 +140,13 @@ public static class ManageSponsorshipGoalsHandler
         {
             return false;
         }
+
+        // STOR-72: requests sent to this set keep their snapshot names and lose the link (SET NULL).
+        // Loading them into the tracker makes EF null the link for every provider, not only Postgres.
+        await dbContext.SponsorshipRequests
+            .Where(r => r.GoalSetId == id)
+            .LoadAsync(cancellationToken)
+            .ConfigureAwait(false);
 
         dbContext.SponsorshipGoalSets.Remove(set);
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);

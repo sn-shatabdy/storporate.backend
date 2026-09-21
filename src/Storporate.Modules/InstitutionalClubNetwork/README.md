@@ -1,6 +1,6 @@
 # InstitutionalClubNetwork
 
-Club profiles and audience snapshots (STOR-69) company sponsorship goals (STOR-70) and sponsor-club matching (STOR-71). A club builds a structured public profile that a company can read in one minute: who the club is, member count, the fields of study and study years its audience comes from, and the events it runs with typical attendance, frequency and the support each event needs. It works for a brand-new club with no past partnerships.
+Club profiles and audience snapshots (STOR-69) company sponsorship goals (STOR-70) sponsor-club matching (STOR-71) and sponsorship requests (STOR-72). A club builds a structured public profile that a company can read in one minute: who the club is, member count, the fields of study and study years its audience comes from, and the events it runs with typical attendance, frequency and the support each event needs. It works for a brand-new club with no past partnerships.
 
 ## Endpoints
 
@@ -64,3 +64,33 @@ Order: Strong, Good, Partial; inside a band by internal points (field 3, event k
 Plain-word search (`SponsorshipMatchQuery`) is a deliberate simplification of natural-language search: no language model and no embeddings. The query is lower-cased, split on non letters and digits, stop words and one-letter tokens are dropped, and each remaining word is expanded through a small synonym map (coding, software, tech to hackathon and Computer Science; hiring, jobs to Recruiting and Career fair; csr, charity to CSR education and Community outreach; sports; culture, music; startup, business; and a few more). A candidate matches when at least one word or synonym appears as a whole word or phrase in its searchable text (club: name, university, city, fields, event titles and detected event kinds; goal: name, company name, objectives, event kinds, fields, cities, universities). A "year 2" or "2nd year" mention becomes a study-year filter. A query with nothing usable left is treated as no query. Search reasons read "Matches your words: hackathon." (max 3 words).
 
 Layout: `SponsorshipMatching/` (`SponsorshipMatcher`, `SponsorshipMatchQuery`, `SponsorshipMatchHandler`, `SponsorshipMatchResponses`). At most 500 newest candidates are read per call.
+
+## Sponsorship requests (STOR-72)
+
+A club with a Published profile sends a sponsorship request for one of its events to a company, through one of the company's Active goal sets. The request carries the event details, what the club asks for and what the company gets in return. Both sides see the same status.
+
+Club (`sponsorship-requests:send`, Club only, always the caller's own requests):
+
+- `POST /api/sponsorship/requests` (201), `GET /api/sponsorship/requests/sent?status=`, `GET /api/sponsorship/requests/sent/{id}`
+- `POST /api/sponsorship/requests/sent/{id}/messages` (201), `POST .../sent/{id}/complete`
+
+Company (`sponsorship-requests:respond`, Organization only, requests received):
+
+- `GET /api/sponsorship/requests/received?status=`, `GET .../received/{id}` (first open of a Sent request marks it Viewed)
+- `POST .../received/{id}/messages` (201), `.../accept`, `.../decline`, `.../complete`
+
+Lists return `{ items }` newest updated first (max 100). A request of another account, on either side, is 404 `sponsorship_request_not_found`. Owner account ids and emails never appear in a response. Sending errors: 404 `club_profile_not_found`, 409 `club_profile_not_published`, 404 `sponsorship_goal_not_found` (unknown or Paused set), 409 `sponsorship_request_duplicate` (same club, goal set and event title, ignoring case, while not Declined or Completed).
+
+State machine (`SponsorshipRequestRules`, pure and unit tested):
+
+- Sent, then Viewed when the company opens it, then InDiscussion on the first message from either side (a message never changes Agreed).
+- The company accepts (Agreed) or declines (Declined) from Sent, Viewed or InDiscussion, with an optional note up to 1000 characters stored in `DecisionNote`.
+- Either side completes an Agreed request (Completed) with an outcome note (1 to 1000 characters) and an optional agreed amount in BDT. Any other source status is 409 `sponsorship_request_invalid_transition`.
+- Messages (1 to 2000 characters, at most 200 per request) are allowed in Sent, Viewed, InDiscussion and Agreed. Declined and Completed are final and closed: 409 `sponsorship_request_closed`.
+- `allowedActions` in the detail tells each side what it may do now: `message`, `accept`, `decline`, `complete` (accept and decline are company only).
+
+Data: non-tenant `SponsorshipRequest` and `SponsorshipRequestMessage` (messages cascade with the request). Names and the goal name are snapshots taken at send time. `GoalSetId` is SET NULL when the company deletes the goal set, so requests stay readable. Audit rows (ids, side and status only): `sponsorship_request_sent`, `sponsorship_request_viewed`, `sponsorship_request_status_changed`, `sponsorship_request_message_sent`, `sponsorship_request_completed`.
+
+Outcome hook for later stories: when a request is Completed, `SponsorshipRequest.OutcomeNote`, `AgreedAmount` and `CompletedAt` hold the recorded outcome. STOR-52 (collaborative events) and STOR-55 (club reputation) read Completed rows from the `SponsorshipRequests` table (filter `Status = 'Completed'`, group by `ClubProfileId` for a club). Nothing is built for them here.
+
+Layout: `SponsorshipRequests/` (`SponsorshipRequestRules`, requests, responses, validators, `SponsorshipRequestHandler`).

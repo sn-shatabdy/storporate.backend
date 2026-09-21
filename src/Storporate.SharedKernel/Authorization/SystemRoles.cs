@@ -160,6 +160,8 @@ public static class SystemRoles
             Permissions.SponsorshipGoals.Manage,
             // STOR-71: Organizations see clubs that fit their goal sets.
             Permissions.SponsorshipMatching.Read,
+            // STOR-72: Organizations answer sponsorship requests from clubs.
+            Permissions.SponsorshipRequests.Respond,
         };
         var studentGrants = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -213,6 +215,8 @@ public static class SystemRoles
             Permissions.SponsorshipGoals.Read,
             // STOR-71: Clubs see companies whose goals fit their profile.
             Permissions.SponsorshipMatching.Read,
+            // STOR-72: Clubs send sponsorship requests to companies.
+            Permissions.SponsorshipRequests.Send,
         };
         var administrator = new HashSet<string>(Permissions.All, StringComparer.Ordinal);
         // The drill-down surface reads another student's TalentIndexEntry;

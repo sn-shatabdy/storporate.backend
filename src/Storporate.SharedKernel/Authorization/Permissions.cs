@@ -348,6 +348,21 @@ public static class Permissions
     }
 
     /// <summary>
+    /// Permissions governing sponsorship requests (STOR-72). <see cref="Send"/> is Club-only (send
+    /// requests and follow, message and complete the caller's own sent requests); <see cref="Respond"/>
+    /// is Organization-only (read, message, accept, decline and complete requests received).
+    /// Administrator receives both via <see cref="All"/>.
+    /// </summary>
+    public static class SponsorshipRequests
+    {
+        /// <summary>Send sponsorship requests and manage the caller's own sent requests.</summary>
+        public const string Send = "sponsorship-requests:send";
+
+        /// <summary>Read and answer sponsorship requests received by the caller's company.</summary>
+        public const string Respond = "sponsorship-requests:respond";
+    }
+
+    /// <summary>
     /// Every permission literal defined across the nested classes above, deduped and
     /// ordinal-sorted. Built once via reflection at class-initialization time so adding a new
     /// nested class / const is automatically reflected here without a hand-edited list.
