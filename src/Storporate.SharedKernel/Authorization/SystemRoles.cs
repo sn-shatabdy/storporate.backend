@@ -39,9 +39,8 @@ public static class SystemRoles
     /// than a hiring party; read-only on <see cref="Entities.Job"/> for now.</summary>
     public static readonly string University = ActorTypes.University;
 
-    /// <summary>Community / club account — same shape as <see cref="University"/> for STOR-62:
-    /// read-only on <see cref="Entities.Job"/>. Narrowed / widened by a future story when a
-    /// concrete Club-domain permission arrives.</summary>
+    /// <summary>Community / club account — read-only on <see cref="Entities.Job"/> plus
+    /// <see cref="Permissions.ClubProfiles.Manage"/> for its own public profile (STOR-69).</summary>
     public static readonly string Club = ActorTypes.Club;
 
     /// <summary>Platform-staff role. Deliberately bypasses workspace isolation (see
@@ -155,6 +154,8 @@ public static class SystemRoles
             Permissions.JobApplications.Review,
             // STOR-68: Organizations shortlist candidates and message them.
             Permissions.Outreach.Send,
+            // STOR-69: Organizations browse Published club profiles.
+            Permissions.ClubProfiles.Read,
         };
         var studentGrants = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -198,6 +199,13 @@ public static class SystemRoles
             // STOR-68: Students read and answer invitations from employers.
             Permissions.Outreach.Respond,
         };
+        // STOR-69: Club keeps Jobs.Read and gains the manage side of its own public profile.
+        // Kept as its own set (not the shared readOnly set) so University is unaffected.
+        var clubGrants = new HashSet<string>(StringComparer.Ordinal)
+        {
+            Permissions.Jobs.Read,
+            Permissions.ClubProfiles.Manage,
+        };
         var administrator = new HashSet<string>(Permissions.All, StringComparer.Ordinal);
         // The drill-down surface reads another student's TalentIndexEntry;
         // even Administrator's workspace-isolation bypass does not extend
@@ -221,7 +229,7 @@ public static class SystemRoles
             [ActorTypes.Student] = studentGrants,
             [ActorTypes.Organization] = fullJobs,
             [ActorTypes.University] = readOnly,
-            [ActorTypes.Club] = readOnly,
+            [ActorTypes.Club] = clubGrants,
             [ActorTypes.Administrator] = administrator,
         };
     }
