@@ -68,7 +68,7 @@ public static class BrowseClubsHandler
         return profile is null ? null : ManageClubProfileHandler.ToResponse(profile);
     }
 
-    private static ClubSummaryResponse ToSummary(ClubProfile p) => new(
+    internal static ClubSummaryResponse ToSummary(ClubProfile p) => new(
         p.Id,
         p.Name,
         p.Tagline,
