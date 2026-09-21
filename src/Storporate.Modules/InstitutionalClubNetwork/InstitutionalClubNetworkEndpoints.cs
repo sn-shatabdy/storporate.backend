@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using FluentValidation;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -6,7 +7,9 @@ using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.InstitutionalClubNetwork.ClubProfiles;
 using Storporate.Modules.InstitutionalClubNetwork.SponsorshipGoals;
+using Storporate.Modules.InstitutionalClubNetwork.SponsorshipMatching;
 using Storporate.SharedKernel.Authorization;
+using Storporate.SharedKernel.Entities;
 
 namespace Storporate.Modules.InstitutionalClubNetwork;
 
@@ -14,7 +17,8 @@ namespace Storporate.Modules.InstitutionalClubNetwork;
 /// STOR-69 endpoints: the club manages its own profile (<c>club-profile:manage</c>) and
 /// companies browse Published profiles (<c>club-profile:read</c>). STOR-70 endpoints: the company
 /// manages its own sponsorship goal sets (<c>sponsorship-goals:manage</c>) and clubs read the
-/// Active ones (<c>sponsorship-goals:read</c>). Every endpoint declares
+/// Active ones (<c>sponsorship-goals:read</c>). STOR-71 endpoints: fit suggestions in both directions
+/// (<c>sponsorship-matches:read</c>). Every endpoint declares
 /// <c>.RequirePermission(...)</c>, as enforced by the architecture tests.
 /// </summary>
 public static class InstitutionalClubNetworkEndpoints
@@ -105,6 +109,7 @@ public static class InstitutionalClubNetworkEndpoints
             .RequirePermission(Permissions.ClubProfiles.Read);
 
         MapSponsorshipGoalEndpoints(app);
+        MapSponsorshipMatchEndpoints(app);
     }
 
     private static void MapSponsorshipGoalEndpoints(WebApplication app)
@@ -224,6 +229,70 @@ public static class InstitutionalClubNetworkEndpoints
                 return response is null ? GoalNotFound() : Results.Ok(response);
             })
             .RequirePermission(Permissions.SponsorshipGoals.Read);
+    }
+
+    private static void MapSponsorshipMatchEndpoints(WebApplication app)
+    {
+        static Guid AccountOf(IAccountContext accountContext) =>
+            accountContext.AccountId ?? accountContext.UserId!.Value;
+
+        // The one permission is granted to both sides, so each endpoint also checks the caller's actor
+        // type (from the JWT claim): the company view is for Organizations, the club view for Clubs.
+        // Administrator passes both, as it does for every other permission.
+        static bool IsActor(ClaimsPrincipal caller, string actorType) =>
+            caller.FindFirst("actor_type")?.Value is { } value
+            && (value == actorType || value == ActorTypes.Administrator);
+
+        static IResult Failure(string errorCode) => errorCode switch
+        {
+            SponsorshipMatchErrors.GoalNotFound => Results.NotFound(BuildErrorBody(
+                errorCode, "The sponsorship goal set was not found.")),
+            SponsorshipMatchErrors.ClubProfileNotFound => Results.NotFound(BuildErrorBody(
+                errorCode, "The club profile was not found.")),
+            SponsorshipMatchErrors.ClubProfileNotPublished => Results.Conflict(BuildErrorBody(
+                errorCode, "Publish your club profile to see matching companies.")),
+            _ => Results.BadRequest(BuildErrorBody(
+                errorCode, $"The search must be at most {SponsorshipMatchQuery.MaxLength} characters.")),
+        };
+
+        // Company side: clubs that fit one of the caller's own goal sets (any status).
+        app.MapGet("/api/sponsorship/goals/{goalId:guid}/club-matches", async (
+                Guid goalId,
+                string? q,
+                ClaimsPrincipal caller,
+                WriteDbContext dbContext,
+                IAccountContext accountContext,
+                CancellationToken cancellationToken) =>
+            {
+                if (!IsActor(caller, ActorTypes.Organization))
+                {
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                }
+
+                var outcome = await SponsorshipMatchHandler.ClubsForGoalAsync(
+                    goalId, AccountOf(accountContext), q, dbContext, cancellationToken).ConfigureAwait(false);
+                return outcome.Value is { } value ? Results.Ok(value) : Failure(outcome.ErrorCode!);
+            })
+            .RequirePermission(Permissions.SponsorshipMatching.Read);
+
+        // Club side: Active goal sets that fit the caller's own Published profile.
+        app.MapGet("/api/clubs/profile/company-matches", async (
+                string? q,
+                ClaimsPrincipal caller,
+                WriteDbContext dbContext,
+                IAccountContext accountContext,
+                CancellationToken cancellationToken) =>
+            {
+                if (!IsActor(caller, ActorTypes.Club))
+                {
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                }
+
+                var outcome = await SponsorshipMatchHandler.CompaniesForClubAsync(
+                    AccountOf(accountContext), q, dbContext, cancellationToken).ConfigureAwait(false);
+                return outcome.Value is { } value ? Results.Ok(value) : Failure(outcome.ErrorCode!);
+            })
+            .RequirePermission(Permissions.SponsorshipMatching.Read);
     }
 
     /// <summary>Standard <c>{ errorCode, message }</c> body; modules must not reference the API project.</summary>

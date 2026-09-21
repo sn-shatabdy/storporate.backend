@@ -337,6 +337,17 @@ public static class Permissions
     }
 
     /// <summary>
+    /// Permission governing sponsor-club matching (STOR-71). <see cref="Read"/> is granted to both
+    /// Organization (clubs that fit one of its goal sets) and Club (companies that fit its profile);
+    /// Administrator receives it via <see cref="All"/>.
+    /// </summary>
+    public static class SponsorshipMatching
+    {
+        /// <summary>Read fit suggestions and their plain-language reasons.</summary>
+        public const string Read = "sponsorship-matches:read";
+    }
+
+    /// <summary>
     /// Every permission literal defined across the nested classes above, deduped and
     /// ordinal-sorted. Built once via reflection at class-initialization time so adding a new
     /// nested class / const is automatically reflected here without a hand-edited list.

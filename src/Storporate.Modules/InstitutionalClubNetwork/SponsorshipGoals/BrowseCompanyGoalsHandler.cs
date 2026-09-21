@@ -81,7 +81,7 @@ public static class BrowseCompanyGoalsHandler
                 set.UpdatedAt);
     }
 
-    private static CompanyGoalSummary ToSummary(SponsorshipGoalSet s) => new(
+    internal static CompanyGoalSummary ToSummary(SponsorshipGoalSet s) => new(
         s.Id,
         s.Name,
         s.CompanyName,
