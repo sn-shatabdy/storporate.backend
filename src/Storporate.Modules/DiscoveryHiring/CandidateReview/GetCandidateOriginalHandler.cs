@@ -205,29 +205,11 @@ public static class GetCandidateOriginalHandler
                 return GetOutcome.OriginalUnavailable();
             }
 
-            ArtifactContent? content;
-            try
-            {
-                content = await artifactStore
-                    .GetAsync(original.StorageKey, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Storporate.Infrastructure.Storage.ArtifactStorageException)
-            {
-                // Other failures (unreachable storage, auth) escape to the
-                // global handler as a 5xx — we only collapse the not-found
-                // case. The blob's not-found paths are:
-                //   1. IArtifactStore.GetAsync returns null (S3 returned 404);
-                //   2. ArtifactStorageException wrapped a not-found;
-                // In both cases the user has nothing to open, so we
-                // surface 404 original_unavailable rather than the generic
-                // 502 the global handler would have produced.
-                // Since the wrapper preserves the not-found only when the
-                // SDK response code is 404 (see S3ArtifactStore.IsNotFound),
-                // any other ArtifactStorageException is a real outage and
-                // intentionally propagates.
-                return GetOutcome.OriginalUnavailable();
-            }
+            // GetAsync returns null for a genuine not-found; any other storage
+            // failure is a real outage and propagates to the global handler as a 5xx.
+            var content = await artifactStore
+                .GetAsync(original.StorageKey, cancellationToken)
+                .ConfigureAwait(false);
 
             if (content is null)
             {
