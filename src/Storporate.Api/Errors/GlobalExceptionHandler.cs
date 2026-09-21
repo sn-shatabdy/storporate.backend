@@ -71,6 +71,8 @@ public sealed class GlobalExceptionHandler(
                 (StatusCodes.Status409Conflict, new ErrorResponse("outreach_already_started", outreachAlreadyStartedException.Message)),
             Storporate.Modules.InstitutionalClubNetwork.Exceptions.ClubProfileIncompleteException clubProfileIncompleteException =>
                 (StatusCodes.Status400BadRequest, new ErrorResponse("club_profile_incomplete", clubProfileIncompleteException.Message)),
+            Storporate.Modules.InstitutionalClubNetwork.Exceptions.ClubProfileConflictException clubProfileConflictException =>
+                (StatusCodes.Status409Conflict, new ErrorResponse("club_profile_conflict", clubProfileConflictException.Message)),
             Storporate.Modules.StudentGrowthExperience.Exceptions.ExplorationNotRetryableException explorationNotRetryableException =>
                 (StatusCodes.Status409Conflict, new ErrorResponse("exploration_not_retryable", explorationNotRetryableException.Message)),
             Storporate.Modules.StudentGrowthExperience.Exceptions.ExplorationLimitReachedException explorationLimitReachedException =>

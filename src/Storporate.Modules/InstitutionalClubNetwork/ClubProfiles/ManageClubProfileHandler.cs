@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Storporate.Infrastructure.Auditing;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.InstitutionalClubNetwork.Exceptions;
@@ -75,7 +76,31 @@ public static class ManageClubProfileHandler
         profile.AudienceYears = JsonSerializer.Serialize(years, ClubProfileOptions.Json);
         profile.EventsJson = JsonSerializer.Serialize(events, ClubProfileOptions.Json);
         profile.UpdatedAt = now;
-        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolationOnOwnerIndex(ex))
+        {
+            // Two concurrent first PUTs from the same club account both pass the
+            // null-check above; the second one's INSERT collides with the
+            // IX_ClubProfiles_OwnerAccountId unique index. The pre-check handles
+            // sequential re-saves; this catch handles the race window where both
+            // callers have already passed the null-check. Translate to the same
+            // conflict the xmin path throws so the global handler maps it to
+            // 409 club_profile_conflict.
+            throw new ClubProfileConflictException();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Existing-profile update path: the xmin concurrency token mapped on
+            // ClubProfile fired because another writer committed between our
+            // load and our SaveChanges. Map to the same exception so the global
+            // handler responds with 409 club_profile_conflict — the operator
+            // gets a single error code for both race types.
+            throw new ClubProfileConflictException();
+        }
 
         await WriteAuditAsync(auditLogWriter, "club_profile_updated", profile.Id, cancellationToken).ConfigureAwait(false);
         return ToResponse(profile);
@@ -239,6 +264,32 @@ public static class ManageClubProfileHandler
     {
         var trimmed = value?.Trim();
         return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+    }
+
+    /// <summary>Walks the <see cref="DbUpdateException"/> cause chain and
+    /// returns <see langword="true"/> only when the inner Postgres error is a
+    /// <c>23505 unique_violation</c> raised by the unique index
+    /// <c>IX_ClubProfiles_OwnerAccountId</c>. Any other 23505 (a future unique
+    /// index on a different column) or any other SqlState bubbles up so the
+    /// global exception handler can map it to its own status. Same shape as
+    /// <c>CreateTalentSearchHandler.IsUniqueViolationOnPendingIndex</c> in the
+    /// DiscoveryHiring module.</summary>
+    private static bool IsUniqueViolationOnOwnerIndex(DbUpdateException ex)
+    {
+        for (var current = ex.InnerException; current is not null; current = current.InnerException)
+        {
+            if (current is PostgresException pg
+                && pg.SqlState == "23505"
+                && string.Equals(
+                    pg.ConstraintName,
+                    "IX_ClubProfiles_OwnerAccountId",
+                    StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static Task WriteAuditAsync(

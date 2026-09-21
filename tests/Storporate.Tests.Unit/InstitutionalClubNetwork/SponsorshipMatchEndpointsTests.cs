@@ -71,7 +71,14 @@ public class SponsorshipMatchEndpointsTests : IClassFixture<DiscoveryHiringEndpo
         using var doc = JsonDocument.Parse(await client.GetStringAsync($"/api/sponsorship/goals/{goal}/club-matches"));
         var item = doc.RootElement.GetProperty("items").EnumerateArray().First(i => i.GetProperty("club").GetProperty("id").GetGuid() == clubId);
         var names = item.GetProperty("club").EnumerateObject().Select(p => p.Name).ToArray();
-        Assert.Equal(new[] { "id", "name", "tagline", "university", "memberCount", "fieldsOfStudy", "eventCount" }, names);
+        // STOR-69 redo Phase 1: the match-card ClubSummary is the same DTO as the
+        // company-side browse list (BrowseClubsHandler.ToSummary). Enriching the
+        // browse summary adds these new fields to the match card too:
+        // foundedYear, audienceYears, eventAttendanceSummary, supportNeeds.
+        Assert.Equal(
+            new[] { "id", "name", "tagline", "university", "memberCount", "fieldsOfStudy", "eventCount",
+                    "foundedYear", "audienceYears", "eventAttendanceSummary", "supportNeeds" },
+            names);
         Assert.Equal(new[] { "fit", "reasons", "club" }, item.EnumerateObject().Select(p => p.Name).ToArray());
     }
 
