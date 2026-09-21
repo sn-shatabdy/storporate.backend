@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Storporate.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using Storporate.Infrastructure.Persistence;
 namespace Storporate.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(WriteDbContext))]
-    partial class WriteDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260921035511_AddTalentSearchPendingUniqueIndex")]
+    partial class AddTalentSearchPendingUniqueIndex
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -730,10 +733,7 @@ namespace Storporate.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("AccountId")
-                        .IsUnique()
-                        .HasDatabaseName("IX_TalentSearchRequests_AccountId")
-                        .HasFilter("\"Status\" = 'Pending'");
+                    b.HasIndex("AccountId");
 
                     b.ToTable("TalentSearchRequests", (string)null);
                 });

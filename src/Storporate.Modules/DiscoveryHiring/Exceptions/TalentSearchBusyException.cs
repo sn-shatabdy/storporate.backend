@@ -10,7 +10,7 @@ namespace Storporate.Modules.DiscoveryHiring.Exceptions;
 /// </summary>
 public sealed class TalentSearchBusyException : Exception
 {
-    public TalentSearchBusyException(Guid accountId)
+    public TalentSearchBusyException()
         : base("A search is already running. Wait for it to finish.")
     {
     }

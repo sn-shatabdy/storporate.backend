@@ -34,7 +34,10 @@ public sealed class FailingTalentIndexRepository : ITalentIndexRepository
         string contentHash,
         IReadOnlyList<float> embedding,
         DateTimeOffset updatedAt,
-        CancellationToken cancellationToken = default) => Task.CompletedTask;
+        CancellationToken cancellationToken = default) =>
+        throw new NotImplementedException(
+            "FailingTalentIndexRepository only simulates a Delete failure; "
+            + "Upsert should not be reached by tests that swap it in.");
 
     public Task<IReadOnlyList<TalentIndexSearchHit>> SearchNearestAsync(
         IReadOnlyList<float> queryVector,

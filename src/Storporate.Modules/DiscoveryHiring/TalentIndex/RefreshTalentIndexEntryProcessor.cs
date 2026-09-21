@@ -242,13 +242,12 @@ public sealed class RefreshTalentIndexEntryProcessor : IBackgroundJobProcessor
             _logger.LogInformation(
                 "Refresh {JobId}: embedding provider failed ({Reason}).",
                 job.Id, ex.Message);
-            var outcome = await JobBookkeeper.RequeueOrFailAsync(
-                _dbContext, job, nowUtc, "Embedding provider error.",
-                _logger, cancellationToken).ConfigureAwait(false);
             // On exhaustion the entry stays at its prior state (or absent).
             // The student can re-trigger by editing and saving their profile,
             // which re-enqueues a refresh job.
-            _ = outcome;
+            await JobBookkeeper.RequeueOrFailAsync(
+                _dbContext, job, nowUtc, "Embedding provider error.",
+                _logger, cancellationToken).ConfigureAwait(false);
             return;
         }
 

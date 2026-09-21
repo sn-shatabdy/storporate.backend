@@ -129,12 +129,14 @@ public static class UpdateSearchableProfileHandler
         // own connection (raw Npgsql under the hood), so the two writes
         // can't share an EF transaction — but ordering them this way
         // still gives all-or-nothing semantics: a delete failure prevents
-        // the profile flip, and the student must PUT isSearchable=true
-        // again to retrigger a refresh (RefreshTalentIndexEntryProcessor
-        // does not auto-recreate the entry on a tick when the profile is
-        // unsearchable). A flip failure after the delete left the system
-        // in a "searchable student with no entry" state, which the next
-        // refresh tick reconciles back.
+        // the profile flip (proven by SearchableProfileOptOutFailureTests.
+        // PutSearchableProfile_OptOut_DeleteFails_ProfileStaysSearchable).
+        // If SaveChangesAsync throws after a successful delete, the entry
+        // is gone but the profile still reads IsSearchable=true; the next
+        // refresh tick sees IsSearchable=true and calls UpsertAsync, so
+        // the entry is recreated and the system reconciles itself. Either
+        // failure direction recovers on the next refresh without a manual
+        // intervention.
         if (wasSearchable && !resolvedIsSearchable)
         {
             await talentIndexRepository

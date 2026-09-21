@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Storporate.Infrastructure.Auditing;
 using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
@@ -106,7 +107,7 @@ public static class CreateTalentSearchHandler
             .ConfigureAwait(false);
         if (hasPending)
         {
-            throw new TalentSearchBusyException(accountId);
+            throw new TalentSearchBusyException();
         }
 
         var now = timeProvider.GetUtcNow();
@@ -137,7 +138,24 @@ public static class CreateTalentSearchHandler
         };
         dbContext.Jobs.Add(job);
 
-        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolationOnPendingIndex(ex))
+        {
+            // Lost the race against a concurrent POST from the same
+            // Organization: the partial unique index
+            // IX_TalentSearchRequests_AccountId (renamed from the
+            // legacy UX_TalentSearchRequests_AccountId_Pending by
+            // SyncTalentSearchRequestIndexes) rejected this
+            // insert. The pre-check above handles the common sequential
+            // case; this catch handles concurrent POSTs that both pass
+            // the pre-check before either has committed. Translate to
+            // the same busy exception the pre-check throws so the
+            // global handler maps it to 409 talent_search_busy.
+            throw new TalentSearchBusyException();
+        }
 
         // Audit metadata: queryLength + queryHash — NEVER the raw
         // query text. Plan rule (Section 6, "Audit"): the raw query
@@ -167,5 +185,29 @@ public static class CreateTalentSearchHandler
         Span<byte> hash = stackalloc byte[32];
         SHA256.HashData(Encoding.UTF8.GetBytes(trimmedQuery), hash);
         return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    /// <summary>Walks the <see cref="DbUpdateException"/> cause chain and
+    /// returns <see langword="true"/> only when the inner Postgres error
+    /// is a <c>23505 unique_violation</c> raised by the partial unique
+    /// index <c>IX_TalentSearchRequests_AccountId</c>. Any other
+    /// 23505 (e.g. a future unique index on a different column) or any
+    /// other SqlState bubbles up so the global exception handler can map
+    /// it to the appropriate 5xx.</summary>
+    private static bool IsUniqueViolationOnPendingIndex(DbUpdateException ex)
+    {
+        for (var current = ex.InnerException; current is not null; current = current.InnerException)
+        {
+            if (current is PostgresException pg
+                && pg.SqlState == "23505"
+                && string.Equals(
+                    pg.ConstraintName,
+                    "IX_TalentSearchRequests_AccountId",
+                    StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 }

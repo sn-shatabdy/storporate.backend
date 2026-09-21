@@ -146,6 +146,53 @@ public class TalentSearchPostgresTests
     }
 
     [LivePgAppFact]
+    public async Task TalentSearchRequests_AsAppRole_WithEmptyIsAdminGuc_DoesNotThrow()
+    {
+        // STOR-43 Cross-Validation Step 5 (H1): pin the value of the
+        // HardenTalentSearchRlsEmptyGuc migration by exercising the
+        // exact failure mode the migration was written to fix. Pre-migration
+        // this raises 22P02 invalid input syntax for type boolean: ''
+        // because the original policy cast current_setting('app.is_admin', true)
+        // straight to boolean; the hardened predicate wraps the read in
+        // NULLIF(..., '') and COALESCE so an empty GUC short-circuits to
+        // FALSE and the SELECT returns 0 rows instead of erroring.
+        var appConnection = RequireAppConnection();
+        var migrationConnection = RequireMigrationConnection();
+
+        var (ownerId, intruderId) = await SeedTwoAccountRowsAsync(migrationConnection);
+
+        try
+        {
+            await using var connection = await OpenCleanAppConnectionAsync(appConnection);
+
+            // Empty app.is_admin GUC (the exact state pre-migration would
+            // throw on). app.account_id is set to a value that doesn't
+            // match any seeded row so the OR-branch stays false.
+            await using (var setAmbient = new NpgsqlCommand(
+                "SELECT set_config('app.account_id', @id, false), set_config('app.is_admin', '', false)",
+                connection))
+            {
+                setAmbient.Parameters.Add(new NpgsqlParameter("@id", NpgsqlTypes.NpgsqlDbType.Text)
+                {
+                    Value = Guid.NewGuid().ToString(),
+                });
+                await setAmbient.ExecuteScalarAsync();
+            }
+
+            // Must NOT throw. The hardened predicate collapses the empty
+            // is_admin to FALSE via COALESCE, then the account_id branch
+            // also evaluates to FALSE (NULLIF + COALESCE → no-match UUID),
+            // so the WHERE clause denies every row.
+            var visibleRows = await CountTalentSearchRequestsAsync(connection);
+            Assert.Equal(0, visibleRows);
+        }
+        finally
+        {
+            await CleanupAsync(migrationConnection, ownerId, intruderId);
+        }
+    }
+
+    [LivePgAppFact]
     public async Task TalentSearchRequests_AsAppRole_WithOwnAccount_ReturnsOnlyOwnRows()
     {
         var appConnection = RequireAppConnection();
@@ -296,6 +343,74 @@ public class TalentSearchPostgresTests
                 "DELETE FROM \"TalentIndexEntries\" WHERE \"Id\" = @id", cleanup);
             del.Parameters.Add(new NpgsqlParameter("@id", NpgsqlTypes.NpgsqlDbType.Uuid) { Value = entryId });
             await del.ExecuteNonQueryAsync();
+        }
+    }
+
+    [LivePgAppFact]
+    public async Task TwoPendingRows_ForSameAccount_SecondInsertRaises23505()
+    {
+        // STOR-43 Cross-Validation Step 5 (security review, item 7):
+        // the AddTalentSearchPendingUniqueIndex migration installs a
+        // partial unique index on TalentSearchRequests(AccountId) WHERE
+        // Status='Pending', so two concurrent POSTs from the same
+        // Organization cannot both insert. We seed the first row, then
+        // attempt the second and assert Postgres rejects it with
+        // 23505 unique_violation — the same condition the handler's
+        // catch translates to TalentSearchBusyException.
+        var migrationConnection = RequireMigrationConnection();
+        var accountId = Guid.NewGuid();
+
+        await using (var ensureUser = new NpgsqlConnection(migrationConnection))
+        {
+            await ensureUser.OpenAsync();
+            await using var insertUser = new NpgsqlCommand(@"
+                INSERT INTO ""Users""
+                    (""Id"", ""Email"", ""ActorType"", ""VerificationStatus"", ""CreatedAt"", ""UpdatedAt"")
+                VALUES (@id, @email, 'Organization', 'Verified', now() at time zone 'utc', now() at time zone 'utc')",
+                ensureUser);
+            insertUser.Parameters.Add(new NpgsqlParameter("@id", NpgsqlTypes.NpgsqlDbType.Uuid) { Value = accountId });
+            insertUser.Parameters.Add(new NpgsqlParameter("@email", NpgsqlTypes.NpgsqlDbType.Text)
+            {
+                Value = $"pending-race-{accountId:N}@example.com",
+            });
+            await insertUser.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            await using var seed = new NpgsqlConnection(migrationConnection);
+            await seed.OpenAsync();
+            await using var firstInsert = new NpgsqlCommand(@"
+                INSERT INTO ""TalentSearchRequests""
+                    (""Id"", ""AccountId"", ""QueryText"", ""Status"", ""CreatedAt"")
+                VALUES (@id, @accountId, 'first', 'Pending', now() at time zone 'utc')", seed);
+            firstInsert.Parameters.Add(new NpgsqlParameter("@id", NpgsqlTypes.NpgsqlDbType.Uuid) { Value = Guid.NewGuid() });
+            firstInsert.Parameters.Add(new NpgsqlParameter("@accountId", NpgsqlTypes.NpgsqlDbType.Uuid) { Value = accountId });
+            await firstInsert.ExecuteNonQueryAsync();
+
+            await using var secondInsert = new NpgsqlCommand(@"
+                INSERT INTO ""TalentSearchRequests""
+                    (""Id"", ""AccountId"", ""QueryText"", ""Status"", ""CreatedAt"")
+                VALUES (@id, @accountId, 'second', 'Pending', now() at time zone 'utc')", seed);
+            secondInsert.Parameters.Add(new NpgsqlParameter("@id", NpgsqlTypes.NpgsqlDbType.Uuid) { Value = Guid.NewGuid() });
+            secondInsert.Parameters.Add(new NpgsqlParameter("@accountId", NpgsqlTypes.NpgsqlDbType.Uuid) { Value = accountId });
+
+            var ex = await Assert.ThrowsAsync<PostgresException>(() => secondInsert.ExecuteNonQueryAsync());
+            Assert.Equal("23505", ex.SqlState);
+            Assert.Equal("IX_TalentSearchRequests_AccountId", ex.ConstraintName);
+        }
+        finally
+        {
+            await using var cleanup = new NpgsqlConnection(migrationConnection);
+            await cleanup.OpenAsync();
+            await using var del = new NpgsqlCommand(
+                "DELETE FROM \"TalentSearchRequests\" WHERE \"AccountId\" = @id", cleanup);
+            del.Parameters.Add(new NpgsqlParameter("@id", NpgsqlTypes.NpgsqlDbType.Uuid) { Value = accountId });
+            await del.ExecuteNonQueryAsync();
+            await using var delUser = new NpgsqlCommand(
+                "DELETE FROM \"Users\" WHERE \"Id\" = @id", cleanup);
+            delUser.Parameters.Add(new NpgsqlParameter("@id", NpgsqlTypes.NpgsqlDbType.Uuid) { Value = accountId });
+            await delUser.ExecuteNonQueryAsync();
         }
     }
 
