@@ -7,6 +7,7 @@ using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.DiscoveryHiring.CandidateReview;
 using Storporate.Modules.DiscoveryHiring.JobApplications;
 using Storporate.Modules.DiscoveryHiring.JobPostings;
+using Storporate.Modules.DiscoveryHiring.Outreach;
 using Storporate.Modules.DiscoveryHiring.SearchableProfile;
 using Storporate.Modules.DiscoveryHiring.TalentSearch;
 using Storporate.SharedKernel.Abstractions;
@@ -288,6 +289,7 @@ public static class DiscoveryHiringEndpoints
 
         MapJobPostingEndpoints(app);
         MapJobApplicationEndpoints(app);
+        app.MapOutreachEndpoints();
     }
 
     /// <summary>STOR-66: Organization posting management (<c>job-postings:manage</c>) and the

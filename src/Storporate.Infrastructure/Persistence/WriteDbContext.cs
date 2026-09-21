@@ -105,6 +105,15 @@ public sealed class WriteDbContext : DbContext
     // snapshot; scoping is by student account (student side) and posting owner (employer side).
     public DbSet<JobApplication> JobApplications => Set<JobApplication>();
 
+    // STOR-68: employer shortlists and employer-student outreach. All three are non-tenant:
+    // employers cannot read student-private tables, so scoping is explicit in the handlers
+    // (organization account on the employer side, student account on the inbox side).
+    public DbSet<ShortlistEntry> ShortlistEntries => Set<ShortlistEntry>();
+
+    public DbSet<OutreachConversation> OutreachConversations => Set<OutreachConversation>();
+
+    public DbSet<OutreachMessage> OutreachMessages => Set<OutreachMessage>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -130,6 +139,9 @@ public sealed class WriteDbContext : DbContext
         modelBuilder.ApplyConfiguration(new TalentSearchRequestConfiguration());
         modelBuilder.ApplyConfiguration(new JobPostingConfiguration());
         modelBuilder.ApplyConfiguration(new JobApplicationConfiguration());
+        modelBuilder.ApplyConfiguration(new ShortlistEntryConfiguration());
+        modelBuilder.ApplyConfiguration(new OutreachConversationConfiguration());
+        modelBuilder.ApplyConfiguration(new OutreachMessageConfiguration());
 
         // Global query filter for every IAccountScoped entity type. We walk the model
         // once via reflection to discover which CLR types implement IAccountScoped,

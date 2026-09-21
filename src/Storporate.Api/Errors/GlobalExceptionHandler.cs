@@ -63,6 +63,12 @@ public sealed class GlobalExceptionHandler(
                 (StatusCodes.Status409Conflict, new ErrorResponse("job_posting_closed", jobPostingClosedException.Message)),
             Storporate.Modules.DiscoveryHiring.Exceptions.ApplicationAlreadySubmittedException applicationAlreadySubmittedException =>
                 (StatusCodes.Status409Conflict, new ErrorResponse("application_already_submitted", applicationAlreadySubmittedException.Message)),
+            Storporate.Modules.DiscoveryHiring.Exceptions.OutreachAwaitingReplyException outreachAwaitingReplyException =>
+                (StatusCodes.Status409Conflict, new ErrorResponse("outreach_awaiting_reply", outreachAwaitingReplyException.Message)),
+            Storporate.Modules.DiscoveryHiring.Exceptions.OutreachDeclinedException outreachDeclinedException =>
+                (StatusCodes.Status409Conflict, new ErrorResponse("outreach_declined", outreachDeclinedException.Message)),
+            Storporate.Modules.DiscoveryHiring.Exceptions.OutreachAlreadyStartedException outreachAlreadyStartedException =>
+                (StatusCodes.Status409Conflict, new ErrorResponse("outreach_already_started", outreachAlreadyStartedException.Message)),
             Storporate.Modules.StudentGrowthExperience.Exceptions.ExplorationNotRetryableException explorationNotRetryableException =>
                 (StatusCodes.Status409Conflict, new ErrorResponse("exploration_not_retryable", explorationNotRetryableException.Message)),
             Storporate.Modules.StudentGrowthExperience.Exceptions.ExplorationLimitReachedException explorationLimitReachedException =>
