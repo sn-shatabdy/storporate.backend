@@ -308,6 +308,20 @@ public static class Permissions
     }
 
     /// <summary>
+    /// Permissions governing club profiles (STOR-69). <see cref="Manage"/> is Club-only (build, edit,
+    /// publish and unpublish the caller's own profile); <see cref="Read"/> is Organization-only
+    /// (browse Published club profiles). Administrator receives both via <see cref="All"/>.
+    /// </summary>
+    public static class ClubProfiles
+    {
+        /// <summary>Create, edit, publish and unpublish the caller's own club profile.</summary>
+        public const string Manage = "club-profile:manage";
+
+        /// <summary>Browse Published club profiles.</summary>
+        public const string Read = "club-profile:read";
+    }
+
+    /// <summary>
     /// Every permission literal defined across the nested classes above, deduped and
     /// ordinal-sorted. Built once via reflection at class-initialization time so adding a new
     /// nested class / const is automatically reflected here without a hand-edited list.

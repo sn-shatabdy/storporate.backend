@@ -114,6 +114,10 @@ public sealed class WriteDbContext : DbContext
 
     public DbSet<OutreachMessage> OutreachMessages => Set<OutreachMessage>();
 
+    // STOR-69: club profiles. Non-tenant: Organizations read Published profiles of other
+    // accounts; owner scoping is explicit in the club handlers (unique OwnerAccountId).
+    public DbSet<ClubProfile> ClubProfiles => Set<ClubProfile>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -142,6 +146,7 @@ public sealed class WriteDbContext : DbContext
         modelBuilder.ApplyConfiguration(new ShortlistEntryConfiguration());
         modelBuilder.ApplyConfiguration(new OutreachConversationConfiguration());
         modelBuilder.ApplyConfiguration(new OutreachMessageConfiguration());
+        modelBuilder.ApplyConfiguration(new ClubProfileConfiguration());
 
         // Global query filter for every IAccountScoped entity type. We walk the model
         // once via reflection to discover which CLR types implement IAccountScoped,

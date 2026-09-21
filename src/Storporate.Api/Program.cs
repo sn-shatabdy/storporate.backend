@@ -26,6 +26,7 @@ using Storporate.Modules.SecurityGovernance;
 using Storporate.Modules.Portfolio;
 using Storporate.Modules.StudentGrowthExperience;
 using Storporate.Modules.DiscoveryHiring;
+using Storporate.Modules.InstitutionalClubNetwork;
 using Storporate.Modules.PlatformFoundations.Diagnostics;
 using Storporate.Infrastructure.Jobs;
 using Storporate.SharedKernel.Abstractions;
@@ -195,6 +196,7 @@ builder.Services.AddSecurityGovernanceHandlers();
 builder.Services.AddPortfolioHandlers();
 builder.Services.AddStudentGrowthExperienceHandlers();
 builder.Services.AddDiscoveryHiringHandlers();
+builder.Services.AddInstitutionalClubNetworkHandlers();
 
 // --- TimeProvider: STOR-38 Phase 2 background worker uses TimeProvider.GetUtcNow()
 // to stamp job StartedAt / UpdatedAt / CompletedAt without going through DateTimeOffset.UtcNow
@@ -396,6 +398,7 @@ app.MapAuditLogEndpoints();
 app.MapPortfolioEndpoints();
 app.MapStudentGrowthExperienceEndpoints();
 app.MapDiscoveryHiringEndpoints();
+app.MapInstitutionalClubNetworkEndpoints();
 
 // --- Temporary diagnostics endpoints (Phase 2: validation/exception-handler proof; Phase 3/4
 // add llm-ping/storage-ping alongside these) ---
