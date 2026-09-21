@@ -284,6 +284,174 @@ public class TalentSearchEndpointsTests : IClassFixture<DiscoveryHiringEndpoints
     }
 
     [Fact]
+    public async Task Get_Completed_EntryDeletedBetweenRuns_DropsEntireCandidateFromResults()
+    {
+        // The student who was a candidate opts out (or otherwise loses
+        // their TalentIndexEntry) between the search running and the GET.
+        // The handler must drop the entire result row rather than leak
+        // stale snapshot fields.
+        var caller = await SeedOrganizationAsync();
+        var tokens = await IssueTokensAsync(caller);
+        var searchId = await SeedCompletedTalentSearchAsync(
+            caller.Id,
+            "Need a backend engineer with Python.",
+            "[{\"candidateId\":\"22222222-2222-2222-2222-222222222222\",\"displayName\":\"Alice Doe\",\"matchedSkills\":[],\"reason\":\"Strong match.\",\"citedItems\":[{\"portfolioItemId\":\"33333333-3333-3333-3333-333333333333\",\"skillName\":\"Python\"}]}]");
+
+        // Wipe the live entry. The re-validation step in the GET handler
+        // must drop the candidate row, returning an empty results array
+        // instead of leaking the stored snapshot.
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<WriteDbContext>();
+            var entry = await db.TalentIndexEntries.IgnoreQueryFilters()
+                .FirstAsync(e => e.Id == Guid.Parse("22222222-2222-2222-2222-222222222222"));
+            db.TalentIndexEntries.Remove(entry);
+            await db.SaveChangesAsync();
+        }
+
+        using var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+
+        var response = await client.GetAsync($"/api/discovery/talent-searches/{searchId}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadFromJsonAsync<TalentSearchResponse>(JsonOptions);
+        Assert.NotNull(body);
+        Assert.NotNull(body!.Results);
+        Assert.Empty(body.Results!);
+    }
+
+    [Fact]
+    public async Task Get_Completed_ItemNoLongerInSnapshot_DropsStaleCitation()
+    {
+        // The candidate still exists in the index, but the cited item id
+        // is no longer in their ItemsJson — the student deleted or
+        // re-analyzed the item since the search ran. The handler must
+        // drop just that citation, not the whole candidate.
+        var caller = await SeedOrganizationAsync();
+        var tokens = await IssueTokensAsync(caller);
+        var searchId = await SeedCompletedTalentSearchAsync(
+            caller.Id,
+            "Need a backend engineer with Python.",
+            "[{\"candidateId\":\"22222222-2222-2222-2222-222222222222\",\"displayName\":\"Alice Doe\",\"matchedSkills\":[],\"reason\":\"Strong match.\",\"citedItems\":[{\"portfolioItemId\":\"99999999-9999-9999-9999-999999999999\",\"skillName\":\"Python\"}]}]");
+
+        using var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+
+        var response = await client.GetAsync($"/api/discovery/talent-searches/{searchId}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadFromJsonAsync<TalentSearchResponse>(JsonOptions);
+        Assert.NotNull(body);
+        Assert.NotNull(body!.Results);
+        // The cited item id was 99999999-... but the seeded entry's snapshot
+        // contains only 33333333-... — re-validation drops the stale
+        // citation and the candidate loses all citations, so the row itself
+        // is dropped (matching the "zero citations → drop row" rule).
+        Assert.Empty(body.Results!);
+    }
+
+    [Fact]
+    public async Task Get_Completed_PartialStaleCitations_DropsOnlyStaleItemsKeepsRow()
+    {
+        // The candidate has TWO cited items in the stored ResultJson, and
+        // one of them has since been removed from the live ItemsJson. The
+        // surviving citation must remain on the row; the stale one must
+        // be dropped; the row itself must stay (because at least one
+        // citation survives).
+        var caller = await SeedOrganizationAsync();
+        var tokens = await IssueTokensAsync(caller);
+
+        // Use a candidate whose seeded ItemsJson contains BOTH item ids so
+        // the snapshot parse yields a 2-element dictionary. The handler's
+        // SeedCompletedTalentSearchAsync seeds only one item id
+        // (33333333-...), so this test reaches in via a small
+        // composite setup instead.
+        var candidateId = Guid.Parse("44444444-4444-4444-4444-444444444444");
+        var itemA = Guid.Parse("55555555-5555-5555-5555-555555555555");
+        var itemB = Guid.Parse("66666666-6666-6666-6666-666666666666");
+        var twoItemSnapshot = "[" +
+            $"{{\"portfolioItemId\":\"{itemA}\",\"label\":\"Item A\",\"category\":\"Project\",\"skills\":[{{\"name\":\"Python\",\"band\":\"Strong\",\"reason\":\"Used Python.\"}}]}}," +
+            $"{{\"portfolioItemId\":\"{itemB}\",\"label\":\"Item B (deleted)\",\"category\":\"Project\",\"skills\":[{{\"name\":\"SQL\",\"band\":\"Developing\",\"reason\":\"Used SQL.\"}}]}}" +
+            "]";
+        var searchId = Guid.NewGuid();
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<WriteDbContext>();
+            var accountContext = scope.ServiceProvider.GetRequiredService<IAccountContextWriter>();
+            accountContext.SetUserId(caller.Id);
+            accountContext.SetAccountId(caller.Id);
+            accountContext.SetIsAdministrator(false);
+
+            db.TalentIndexEntries.Add(new TalentIndexEntry
+            {
+                Id = candidateId,
+                StudentAccountId = candidateId,
+                DisplayName = "Alice Doe",
+                ItemsJson = twoItemSnapshot,
+                SearchText = "seed",
+                ContentHash = "seed",
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+
+            // The stored ResultJson cites item A (still alive) AND
+            // item Z (a third item that was never added — simulating a
+            // student who deleted an unrelated item between then and now).
+            var resultJson =
+                "[" +
+                $"{{\"candidateId\":\"{candidateId}\",\"displayName\":\"Alice Doe\","
+                + "\"matchedSkills\":[],\"reason\":\"Strong match.\","
+                + $"\"citedItems\":[{{\"portfolioItemId\":\"{itemA}\",\"skillName\":\"Python\"}},"
+                + "{\"portfolioItemId\":\"77777777-7777-7777-7777-777777777777\",\"skillName\":\"Python\"}]"
+                + "}]";
+
+            db.TalentSearchRequests.Add(new TalentSearchRequest
+            {
+                Id = searchId,
+                AccountId = caller.Id,
+                QueryText = "Need backend + SQL.",
+                Status = TalentSearchStatuses.Completed,
+                CreatedAt = DateTimeOffset.UtcNow.AddSeconds(-30),
+                CompletedAt = DateTimeOffset.UtcNow,
+                ResultJson = resultJson,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        // Now delete item B from the snapshot, leaving only item A. The
+        // stored ResultJson cited item A and item Z (a non-existent id);
+        // re-validation keeps item A and drops item Z.
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<WriteDbContext>();
+            var entry = await db.TalentIndexEntries.IgnoreQueryFilters()
+                .FirstAsync(e => e.Id == candidateId);
+            entry.ItemsJson = "[" +
+                $"{{\"portfolioItemId\":\"{itemA}\",\"label\":\"Item A\",\"category\":\"Project\",\"skills\":[{{\"name\":\"Python\",\"band\":\"Strong\",\"reason\":\"Used Python.\"}}]}}" +
+                "]";
+            entry.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+        }
+
+        using var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+
+        var response = await client.GetAsync($"/api/discovery/talent-searches/{searchId}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadFromJsonAsync<TalentSearchResponse>(JsonOptions);
+        Assert.NotNull(body);
+        Assert.NotNull(body!.Results);
+        Assert.Single(body.Results!);
+        var row = body.Results![0];
+        Assert.Equal(candidateId, row.CandidateId);
+        Assert.NotNull(row.CitedItems);
+        Assert.Single(row.CitedItems!);
+        Assert.Equal(itemA, row.CitedItems![0].PortfolioItemId);
+    }
+
+    [Fact]
     public async Task Get_CrossAccountId_Returns404()
     {
         var owner = await SeedOrganizationAsync();

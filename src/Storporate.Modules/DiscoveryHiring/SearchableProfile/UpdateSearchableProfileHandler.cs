@@ -124,29 +124,29 @@ public static class UpdateSearchableProfileHandler
             profile.UpdatedAt = now;
         }
 
-        // Opt-out path: delete the mirror TalentIndexEntry in the same
-        // transaction. The repo's DeleteAsync is a no-op when the row is
-        // absent, so a second PUT (already opted out) doesn't error.
+        // Opt-out path: delete the mirror TalentIndexEntry BEFORE the
+        // SaveChanges that flips IsSearchable. The repository runs in its
+        // own connection (raw Npgsql under the hood), so the two writes
+        // can't share an EF transaction — but ordering them this way
+        // still gives all-or-nothing semantics: a delete failure prevents
+        // the profile flip, and the student must PUT isSearchable=true
+        // again to retrigger a refresh (RefreshTalentIndexEntryProcessor
+        // does not auto-recreate the entry on a tick when the profile is
+        // unsearchable). A flip failure after the delete left the system
+        // in a "searchable student with no entry" state, which the next
+        // refresh tick reconciles back.
         if (wasSearchable && !resolvedIsSearchable)
         {
-            // The repository runs in its own connection (raw Npgsql under
-            // the hood). The SaveChangesAsync below commits the profile row
-            // first; the entry deletion runs against the live row, so the
-            // call order is: (1) commit the opt-out flip; (2) drop the entry.
-            // A failure between (1) and (2) leaves a "searchable student
-            // with no entry" state — which the next refresh job reconciles
-            // because the profile is now IsSearchable=false and the
-            // processor deletes the entry on the way through.
-            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
             await talentIndexRepository
                 .DeleteAsync(accountId, cancellationToken)
                 .ConfigureAwait(false);
 
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
             await WriteAuditIfToggledAsync(
                 auditLogWriter,
                 enabled: false,
-                accountId,
+                profile.Id,
                 cancellationToken).ConfigureAwait(false);
 
             return BuildResponse(profile, visibleItemCount: 0);
@@ -173,7 +173,7 @@ public static class UpdateSearchableProfileHandler
             await WriteAuditIfToggledAsync(
                 auditLogWriter,
                 enabled: true,
-                accountId,
+                profile.Id,
                 cancellationToken).ConfigureAwait(false);
         }
 
@@ -208,14 +208,14 @@ public static class UpdateSearchableProfileHandler
     private static Task WriteAuditIfToggledAsync(
         IAuditLogWriter auditLogWriter,
         bool enabled,
-        Guid accountId,
+        Guid profileId,
         CancellationToken cancellationToken)
     {
         var action = enabled ? "searchable_profile_enabled" : "searchable_profile_disabled";
         return auditLogWriter.WriteAsync(
             action: action,
             resourceType: "SearchableProfile",
-            resourceId: accountId.ToString(),
+            resourceId: profileId.ToString(),
             metadataJson: null,
             cancellationToken: cancellationToken);
     }

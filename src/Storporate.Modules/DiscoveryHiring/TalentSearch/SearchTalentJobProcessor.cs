@@ -1,5 +1,3 @@
-using System.Globalization;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
@@ -116,8 +114,11 @@ public sealed class SearchTalentJobProcessor : IBackgroundJobProcessor
     /// <remarks>
     /// Mirrors the abandoned-job disposition onto the parent
     /// <see cref="TalentSearchRequest"/> so the API's status flips in
-    /// lockstep with the job. OnJobAbandonedAsync runs under the job's
-    /// account scope already (the reaper opens it before invoking us).
+    /// lockstep with the job. OnJobAbandonedAsync must be invoked under the
+    /// job's account scope — <c>PortfolioAnalysisWorker.MirrorAbandonedJobsAsync</c>
+    /// opens <c>BeginAccountScope(job.AccountId)</c> before calling here, and
+    /// the EF global query filter on <see cref="IAccountScoped"/> would
+    /// otherwise hide the parent <see cref="TalentSearchRequest"/> row.
     /// </remarks>
     public async Task OnJobAbandonedAsync(Job job, CancellationToken cancellationToken)
     {
@@ -190,8 +191,11 @@ public sealed class SearchTalentJobProcessor : IBackgroundJobProcessor
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unexpected error processing search job {JobId}; treating as retryable.", job.Id);
+                // The exception message can echo a provider's input — log it
+                // (already done above) but don't include it in the job
+                // failure reason / audit chain.
                 await JobBookkeeper.RequeueOrFailAsync(
-                    _dbContext, job, nowUtc, "Internal processor error: " + ex.Message,
+                    _dbContext, job, nowUtc, "Internal processor error.",
                     _logger, cancellationToken).ConfigureAwait(false);
                 return BackgroundJobTickOutcome.Processed;
             }
@@ -256,8 +260,11 @@ public sealed class SearchTalentJobProcessor : IBackgroundJobProcessor
         }
         catch (LlmProviderException ex)
         {
+            _logger.LogInformation(
+                "Search {SearchId}: embedding provider failed ({Reason}).",
+                searchId, ex.Message);
             var outcome = await JobBookkeeper.RequeueOrFailAsync(
-                _dbContext, job, nowUtc, "Embedding provider error: " + ex.Message,
+                _dbContext, job, nowUtc, "Embedding provider error.",
                 _logger, cancellationToken).ConfigureAwait(false);
             if (outcome == JobBookkeeper.RequeueOrFailOutcome.Failed)
             {
@@ -279,8 +286,11 @@ public sealed class SearchTalentJobProcessor : IBackgroundJobProcessor
         {
             // SearchNearestAsync throws LlmProviderException only on a wrong-dimension
             // query (the repository does no other LLM calls). Treat as provider failure.
+            _logger.LogInformation(
+                "Search {SearchId}: embedding dimension error ({Reason}).",
+                searchId, ex.Message);
             var outcome = await JobBookkeeper.RequeueOrFailAsync(
-                _dbContext, job, nowUtc, "Embedding dimension error: " + ex.Message,
+                _dbContext, job, nowUtc, "Embedding dimension error.",
                 _logger, cancellationToken).ConfigureAwait(false);
             if (outcome == JobBookkeeper.RequeueOrFailOutcome.Failed)
             {
@@ -612,26 +622,4 @@ public sealed class SearchTalentJobProcessor : IBackgroundJobProcessor
             return false;
         }
     }
-
-    // Hash computation (kept here to share the audit shape the prompt asks
-    // for in the test). Currently the POST endpoint writes the hash; this
-    // is here for symmetry only.
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "Future use")]
-    internal static string ComputeQueryHash(string trimmedQuery)
-    {
-        Span<byte> hash = stackalloc byte[32];
-        SHA256.HashData(Encoding.UTF8.GetBytes(trimmedQuery), hash);
-        return Convert.ToHexString(hash).ToLowerInvariant();
-    }
-
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "Future use")]
-    internal static int TrimmedLength(string? raw)
-    {
-        if (raw is null) return 0;
-        return raw.Trim().Length;
-    }
-
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "Future use")]
-    internal static string FormatInvariantInt(int value) =>
-        value.ToString(CultureInfo.InvariantCulture);
 }

@@ -81,6 +81,61 @@ public class SearchableProfileEndpointsTests : IClassFixture<DiscoveryHiringEndp
     }
 
     [Fact]
+    public async Task GetSearchableProfile_TwoStudents_ReturnOnlyOwnProfile()
+    {
+        // Two students are issued access tokens. Student A opts in with a
+        // recognizable headline; student B has never PUT. The JWT principal
+        // resolves the account id, so B's GET must return only B's profile
+        // (default IsSearchable=false, empty headline) — never A's headline.
+        // This is the cross-student isolation guarantee on the read path;
+        // the global query filter handles it (the read keys off the JWT's
+        // accountId, not any client-supplied id).
+        var studentA = await SeedStudentUserAsync();
+        var studentB = await SeedStudentUserAsync();
+        var tokensA = await IssueTokensAsync(studentA);
+        var tokensB = await IssueTokensAsync(studentB);
+
+        using (var client = _factory.CreateClient())
+        {
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokensA.AccessToken);
+            var putResponse = await client.PutAsJsonAsync("/api/discovery/searchable-profile", new
+            {
+                isSearchable = true,
+                displayName = "Sara Field",
+                headline = "Power BI + SQL analyst",
+            });
+            Assert.Equal(HttpStatusCode.OK, putResponse.StatusCode);
+        }
+
+        // B has never PUT — GET should still succeed and return defaults.
+        using (var client = _factory.CreateClient())
+        {
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokensB.AccessToken);
+            var response = await client.GetAsync("/api/discovery/searchable-profile");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            var body = await response.Content.ReadFromJsonAsync<SearchableProfileResponse>(JsonOptions);
+            Assert.NotNull(body);
+            Assert.False(body!.IsSearchable);
+            Assert.Null(body.Headline);
+            Assert.Empty(body.DisplayName);
+        }
+
+        // A's GET must still see A's own headline (sanity).
+        using (var client = _factory.CreateClient())
+        {
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokensA.AccessToken);
+            var response = await client.GetAsync("/api/discovery/searchable-profile");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            var body = await response.Content.ReadFromJsonAsync<SearchableProfileResponse>(JsonOptions);
+            Assert.NotNull(body);
+            Assert.True(body!.IsSearchable);
+            Assert.Equal("Power BI + SQL analyst", body.Headline);
+        }
+    }
+
+    [Fact]
     public async Task PutSearchableProfile_FirstEverOptInBlankDisplayName_Returns400DisplayNameRequired()
     {
         var user = await SeedStudentUserAsync();
@@ -117,6 +172,89 @@ public class SearchableProfileEndpointsTests : IClassFixture<DiscoveryHiringEndp
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal("display_name_too_long", await ReadErrorCodeAsync(response));
+    }
+
+    [Fact]
+    public async Task PutSearchableProfile_HeadlineOver120Chars_Returns400HeadlineTooLong()
+    {
+        var user = await SeedStudentUserAsync();
+        var tokens = await IssueTokensAsync(user);
+
+        using var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+
+        var oversized = new string('h', 121);
+        var response = await client.PutAsJsonAsync("/api/discovery/searchable-profile", new
+        {
+            isSearchable = true,
+            displayName = "Sara Field",
+            headline = oversized,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("headline_too_long", await ReadErrorCodeAsync(response));
+    }
+
+    [Fact]
+    public async Task PutSearchableProfile_UniversityOver120Chars_Returns400UniversityTooLong()
+    {
+        var user = await SeedStudentUserAsync();
+        var tokens = await IssueTokensAsync(user);
+
+        using var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+
+        var oversized = new string('u', 121);
+        var response = await client.PutAsJsonAsync("/api/discovery/searchable-profile", new
+        {
+            isSearchable = true,
+            displayName = "Sara Field",
+            university = oversized,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("university_too_long", await ReadErrorCodeAsync(response));
+    }
+
+    [Fact]
+    public async Task PutSearchableProfile_FieldOfStudyOver120Chars_Returns400FieldOfStudyTooLong()
+    {
+        var user = await SeedStudentUserAsync();
+        var tokens = await IssueTokensAsync(user);
+
+        using var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+
+        var oversized = new string('f', 121);
+        var response = await client.PutAsJsonAsync("/api/discovery/searchable-profile", new
+        {
+            isSearchable = true,
+            displayName = "Sara Field",
+            fieldOfStudy = oversized,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("field_of_study_too_long", await ReadErrorCodeAsync(response));
+    }
+
+    [Fact]
+    public async Task PutSearchableProfile_StudyYearOutOfRange_Returns400StudyYearOutOfRange()
+    {
+        var user = await SeedStudentUserAsync();
+        var tokens = await IssueTokensAsync(user);
+
+        using var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+
+        var response = await client.PutAsJsonAsync("/api/discovery/searchable-profile", new
+        {
+            isSearchable = true,
+            displayName = "Sara Field",
+            studyYear = 9,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("study_year_out_of_range", await ReadErrorCodeAsync(response));
     }
 
     [Fact]
@@ -185,7 +323,12 @@ public class SearchableProfileEndpointsTests : IClassFixture<DiscoveryHiringEndp
         var auditRow = Assert.Single(newAuditEntries);
         Assert.Equal("searchable_profile_enabled", auditRow.Action);
         Assert.Equal("SearchableProfile", auditRow.ResourceType);
-        Assert.Equal(user.Id.ToString(), auditRow.ResourceId);
+        // Per StudentSearchProfileConfiguration's documented contract, the
+        // audit row keys off the row's Id, not the AccountId — so the
+        // handler writes profile.Id here. The seeded profile's Id was
+        // assigned by the handler on first-time PUT (load the row to
+        // compare rather than hard-coding a Guid).
+        Assert.Equal(profile.Id.ToString(), auditRow.ResourceId);
     }
 
     [Fact]
@@ -235,11 +378,12 @@ public class SearchableProfileEndpointsTests : IClassFixture<DiscoveryHiringEndp
         });
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
+        StudentSearchProfile? profile = null;
         using (var verifyScope = _factory.Services.CreateScope())
         {
             var db = verifyScope.ServiceProvider.GetRequiredService<WriteDbContext>();
             // Profile is now not searchable.
-            var profile = await db.StudentSearchProfiles
+            profile = await db.StudentSearchProfiles
                 .AsNoTracking()
                 .SingleAsync(p => p.AccountId == user.Id);
             Assert.False(profile.IsSearchable);
@@ -257,7 +401,8 @@ public class SearchableProfileEndpointsTests : IClassFixture<DiscoveryHiringEndp
         var auditRow = Assert.Single(newAuditEntries);
         Assert.Equal("searchable_profile_disabled", auditRow.Action);
         Assert.Equal("SearchableProfile", auditRow.ResourceType);
-        Assert.Equal(user.Id.ToString(), auditRow.ResourceId);
+        Assert.NotNull(profile);
+        Assert.Equal(profile!.Id.ToString(), auditRow.ResourceId);
     }
 
     [Fact]

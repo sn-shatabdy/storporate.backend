@@ -154,8 +154,11 @@ public sealed class RefreshTalentIndexEntryProcessor : IBackgroundJobProcessor
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unexpected error processing job {JobId}; treating as retryable.", job.Id);
+                // The exception message can echo a provider's input — log it
+                // (already done above) but don't include it in the job
+                // failure reason / audit chain.
                 await JobBookkeeper.RequeueOrFailAsync(
-                    _dbContext, job, nowUtc, "Internal processor error: " + ex.Message,
+                    _dbContext, job, nowUtc, "Internal processor error.",
                     _logger, cancellationToken).ConfigureAwait(false);
                 return BackgroundJobTickOutcome.Processed;
             }
@@ -236,8 +239,11 @@ public sealed class RefreshTalentIndexEntryProcessor : IBackgroundJobProcessor
         }
         catch (LlmProviderException ex)
         {
+            _logger.LogInformation(
+                "Refresh {JobId}: embedding provider failed ({Reason}).",
+                job.Id, ex.Message);
             var outcome = await JobBookkeeper.RequeueOrFailAsync(
-                _dbContext, job, nowUtc, "Embedding provider error: " + ex.Message,
+                _dbContext, job, nowUtc, "Embedding provider error.",
                 _logger, cancellationToken).ConfigureAwait(false);
             // On exhaustion the entry stays at its prior state (or absent).
             // The student can re-trigger by editing and saving their profile,

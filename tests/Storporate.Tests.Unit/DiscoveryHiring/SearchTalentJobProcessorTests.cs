@@ -286,7 +286,9 @@ public class SearchTalentJobProcessorTests
         var job = await fixture.Db.Jobs.AsNoTracking().SingleAsync();
         Assert.Equal(JobStatus.Failed, job.Status);
         Assert.Equal(JobBookkeeper.MaxAttempts, job.AttemptCount);
-        Assert.Contains("provider down 3", job.ErrorMessage);
+        // Sanitized — see the matching comment in
+        // RefreshTalentIndexEntryProcessorTests.EmbeddingFailureAfterThreeAttempts_JobIsFailed.
+        Assert.Contains("Embedding provider error", job.ErrorMessage);
 
         var request = await fixture.Db.TalentSearchRequests.AsNoTracking().SingleAsync();
         Assert.Equal(TalentSearchStatuses.Failed, request.Status);
@@ -338,6 +340,75 @@ public class SearchTalentJobProcessorTests
         Assert.Contains("untrusted data", request.SystemPrompt, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("STRICT JSON", request.SystemPrompt, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("citations", request.SystemPrompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task OnJobAbandoned_MirrorsParentRequestToFailedAndWritesAuditRow()
+    {
+        // Seed a Pending request + Pending job (we don't run the processor
+        // tick — we want to simulate the reaper calling OnJobAbandonedAsync
+        // directly, which is exactly what happens when a job sits in the
+        // queue past its LeaseUntil deadline).
+        var fixture = await SeedPendingSearchJobAsync(
+            seedCandidateIds: new[] { Guid.NewGuid() },
+            candidateDisplayNames: new Dictionary<Guid, string>());
+
+        var job = await fixture.Db.Jobs.AsNoTracking()
+            .Where(j => j.Type == DiscoveryJobTypes.SearchTalent)
+            .SingleAsync();
+        var searchId = fixture.Db.TalentSearchRequests.AsNoTracking().Single().Id;
+        var existingAuditCount = fixture.AuditLogWriter.Recorded.Count;
+
+        await fixture.Processor.OnJobAbandonedAsync(job, CancellationToken.None);
+
+        // Parent request flips to Failed with the canonical error code.
+        var request = await fixture.Db.TalentSearchRequests.AsNoTracking()
+            .SingleAsync(r => r.Id == searchId);
+        Assert.Equal(TalentSearchStatuses.Failed, request.Status);
+        Assert.Equal("llm_provider_error", request.ErrorCode);
+        Assert.NotNull(request.CompletedAt);
+
+        // Audit row is written for the failure (action: talent_search_failed).
+        var newAudit = fixture.AuditLogWriter.Recorded
+            .Skip(existingAuditCount).ToList();
+        var auditRow = Assert.Single(newAudit);
+        Assert.Equal("talent_search_failed", auditRow.Action);
+        Assert.Equal("TalentSearch", auditRow.ResourceType);
+        Assert.Equal(searchId.ToString(), auditRow.ResourceId);
+        Assert.Contains("llm_provider_error", auditRow.MetadataJson ?? string.Empty,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task OnJobAbandoned_UnknownSearchId_IsNoOp()
+    {
+        // The reaper can call OnJobAbandonedAsync with a payload referencing
+        // a search row that has been deleted out from under it (e.g. an
+        // admin-purged row). The handler must not throw — it just exits.
+        var fixture = await SeedPendingSearchJobAsync(
+            seedCandidateIds: new[] { Guid.NewGuid() },
+            candidateDisplayNames: new Dictionary<Guid, string>());
+
+        var orphanJob = new Job
+        {
+            Id = Guid.NewGuid(),
+            Type = DiscoveryJobTypes.SearchTalent,
+            PayloadJson = JsonSerializer.Serialize(new SearchTalentPayload(Guid.NewGuid())),
+            Status = JobStatus.Pending,
+            AttemptCount = 0,
+            AccountId = fixture.AccountId,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+
+        var existingAuditCount = fixture.AuditLogWriter.Recorded.Count;
+        await fixture.Processor.OnJobAbandonedAsync(orphanJob, CancellationToken.None);
+
+        // No exception, no audit row. The Pending request from the seed
+        // is untouched.
+        var pending = await fixture.Db.TalentSearchRequests.AsNoTracking().SingleAsync();
+        Assert.Equal(TalentSearchStatuses.Pending, pending.Status);
+        Assert.Empty(fixture.AuditLogWriter.Recorded.Skip(existingAuditCount).ToList());
     }
 
     // ----- infrastructure -----

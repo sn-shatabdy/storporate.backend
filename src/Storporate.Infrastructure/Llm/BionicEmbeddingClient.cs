@@ -138,13 +138,17 @@ public sealed class BionicEmbeddingClient : IEmbeddingClient
             if (!httpResponse.IsSuccessStatusCode)
             {
                 var errorBody = await httpResponse.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                // Truncate before logging/throwing so a hosted provider that
+                // echoes the input prompt in its 4xx body can't leak the
+                // caller's raw query through the log/audit chain.
+                var sanitizedBody = errorBody.Length > 200 ? errorBody[..200] + "…" : errorBody;
                 _logger.LogError(
                     "Embedding provider returned {StatusCode} {ReasonPhrase}: {Body}",
                     (int)httpResponse.StatusCode,
                     httpResponse.ReasonPhrase,
-                    errorBody);
+                    sanitizedBody);
                 throw new LlmProviderException(
-                    $"Embedding provider returned {(int)httpResponse.StatusCode} {httpResponse.ReasonPhrase}: {errorBody}");
+                    $"Embedding provider returned {(int)httpResponse.StatusCode} {httpResponse.ReasonPhrase}.");
             }
 
             BionicEmbeddingsResponse? response;

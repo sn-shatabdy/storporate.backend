@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
 using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Jobs;
 using Storporate.Infrastructure.Llm;
@@ -150,7 +151,11 @@ public class RefreshTalentIndexEntryProcessorTests
         var job = await fixture.Db.Jobs.AsNoTracking().SingleAsync();
         Assert.Equal(JobStatus.Failed, job.Status);
         Assert.Equal(JobBookkeeper.MaxAttempts, job.AttemptCount);
-        Assert.Contains("provider down 3", job.ErrorMessage);
+        // The Job.ErrorMessage column is sanitized — the processor no longer
+        // includes the raw provider exception text so a hosted provider
+        // that echoes its input prompt in the 4xx body can't leak it into
+        // the audit chain. The fixed reason is what the operator sees.
+        Assert.Contains("Embedding provider error", job.ErrorMessage);
     }
 
     [Fact]
@@ -213,18 +218,97 @@ public class RefreshTalentIndexEntryProcessorTests
         Assert.Equal(0, fixture.EmbeddingClient.CallCount);
     }
 
+    [Fact]
+    public async Task ItemDeletedBetweenRefreshes_NewItemsJsonOmitsRemovedItemId()
+    {
+        // First tick: student has two analyzed items with Strong findings,
+        // so the entry's ItemsJson contains both item ids.
+        var fixture = await SeedPendingRefreshJobAsync(
+            isSearchable: true,
+            seedAnalyzedItem: true,
+            includeStrongFinding: true,
+            extraAnalyzedItem: true);
+
+        var firstOutcome = await fixture.Processor.TryProcessOneAsync(CancellationToken.None);
+        Assert.Equal(BackgroundJobTickOutcome.Processed, firstOutcome);
+
+        var firstEntry = await fixture.Db.TalentIndexEntries.AsNoTracking()
+            .SingleAsync(e => e.StudentAccountId == fixture.AccountId);
+        var firstIds = ExtractPortfolioItemIds(firstEntry.ItemsJson);
+        Assert.Equal(2, firstIds.Count);
+
+        // The student deletes the first item via the portfolio DELETE
+        // endpoint (here simulated by removing the EF row directly — the
+        // production handler does the same EF remove). Then enqueue a
+        // second refresh job so the processor reprojects the index.
+        var survivingItemId = firstIds.First(id =>
+            id != fixture.FirstSeededItemId);
+        var deletedItemId = fixture.FirstSeededItemId;
+        fixture.Db.PortfolioItems.RemoveRange(
+            fixture.Db.PortfolioItems
+                .Where(i => i.AccountId == fixture.AccountId && i.Id == deletedItemId));
+        fixture.Db.PortfolioSkillFindings.RemoveRange(
+            fixture.Db.PortfolioSkillFindings
+                .Where(f => f.AccountId == fixture.AccountId && f.PortfolioItemId == deletedItemId));
+        fixture.Db.Jobs.Add(new Job
+        {
+            Id = Guid.NewGuid(),
+            Type = TalentIndexJobTypes.RefreshEntry,
+            PayloadJson = System.Text.Json.JsonSerializer.Serialize(
+                new RefreshTalentIndexPayload(fixture.AccountId)),
+            Status = JobStatus.Pending,
+            AttemptCount = 0,
+            AccountId = fixture.AccountId,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        await fixture.Db.SaveChangesAsync();
+
+        // Second tick reprojects. The ItemsJson must contain only the
+        // surviving item id, not the deleted one. Content-hash differs so
+        // the embedding call runs again (1 from the first tick + 1 here).
+        var secondOutcome = await fixture.Processor.TryProcessOneAsync(CancellationToken.None);
+        Assert.Equal(BackgroundJobTickOutcome.Processed, secondOutcome);
+        Assert.Equal(2, fixture.EmbeddingClient.CallCount);
+
+        var secondEntry = await fixture.Db.TalentIndexEntries.AsNoTracking()
+            .SingleAsync(e => e.StudentAccountId == fixture.AccountId);
+        var secondIds = ExtractPortfolioItemIds(secondEntry.ItemsJson);
+        Assert.Single(secondIds);
+        Assert.Contains(survivingItemId, secondIds);
+        Assert.DoesNotContain(deletedItemId, secondIds);
+    }
+
+    /// <summary>Parse the stored JSON to recover the ordered list of
+    /// <c>portfolioItemId</c> values for assertion. The processor writes
+    /// <see cref="TalentIndexItemSnapshot"/> rows; their <c>portfolioItemId</c>
+    /// field is the assertion target.</summary>
+    private static List<Guid> ExtractPortfolioItemIds(string itemsJson)
+    {
+        var options = new System.Text.Json.JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            PropertyNameCaseInsensitive = true,
+        };
+        var snapshots = System.Text.Json.JsonSerializer
+            .Deserialize<List<TalentIndexItemSnapshot>>(itemsJson, options)
+            ?? new List<TalentIndexItemSnapshot>();
+        return snapshots.Select(s => s.PortfolioItemId).ToList();
+    }
+
     // ----- infrastructure -----
 
     private async Task<Fixture> SeedPendingRefreshJobAsync(
         bool isSearchable,
         bool seedAnalyzedItem,
         bool includeStrongFinding,
-        bool includeMissingFinding = false)
+        bool includeMissingFinding = false,
+        bool extraAnalyzedItem = false)
     {
         var accountId = Guid.NewGuid();
         var databaseName = "RefreshTalentIndexEntryProcessorTests-" + Guid.NewGuid().ToString("N");
         var sharedRoot = new InMemoryDatabaseRoot();
         var embeddingClient = new FakeEmbeddingClient();
+        var firstSeededItemId = Guid.Empty;
 
         await using (var seedContext = CreateDbContextOnSharedRoot(
                          databaseName, sharedRoot, accountId))
@@ -242,6 +326,7 @@ public class RefreshTalentIndexEntryProcessorTests
             if (seedAnalyzedItem)
             {
                 var itemId = Guid.NewGuid();
+                firstSeededItemId = itemId;
                 seedContext.PortfolioItems.Add(new PortfolioItem
                 {
                     Id = itemId,
@@ -282,6 +367,33 @@ public class RefreshTalentIndexEntryProcessorTests
                         CreatedAt = DateTimeOffset.UtcNow,
                     });
                 }
+
+                if (extraAnalyzedItem)
+                {
+                    var secondItemId = Guid.NewGuid();
+                    seedContext.PortfolioItems.Add(new PortfolioItem
+                    {
+                        Id = secondItemId,
+                        AccountId = accountId,
+                        Label = "Seed Item Two",
+                        Category = PortfolioCategories.Document,
+                        SubmissionType = PortfolioSubmissionTypes.Link,
+                        ExternalUrl = "https://example.com/seed-two",
+                        CreatedAt = DateTimeOffset.UtcNow,
+                        AnalysisStatus = PortfolioAnalysisStatuses.Analyzed,
+                        LastAnalyzedAt = DateTimeOffset.UtcNow,
+                    });
+                    seedContext.PortfolioSkillFindings.Add(new PortfolioSkillFinding
+                    {
+                        Id = Guid.NewGuid(),
+                        AccountId = accountId,
+                        PortfolioItemId = secondItemId,
+                        SkillName = "SQL",
+                        ConfidenceBand = ConfidenceBands.Strong,
+                        Explanation = "Schema design work in the second item.",
+                        CreatedAt = DateTimeOffset.UtcNow,
+                    });
+                }
             }
 
             seedContext.Jobs.Add(new Job
@@ -319,7 +431,7 @@ public class RefreshTalentIndexEntryProcessorTests
             TimeProvider.System,
             scope);
 
-        return new Fixture(dbContext, processor, embeddingClient, accountId);
+        return new Fixture(dbContext, processor, embeddingClient, accountId, firstSeededItemId);
     }
 
     private static WriteDbContext CreateDbContextOnSharedRoot(
@@ -353,5 +465,6 @@ public class RefreshTalentIndexEntryProcessorTests
         WriteDbContext Db,
         RefreshTalentIndexEntryProcessor Processor,
         FakeEmbeddingClient EmbeddingClient,
-        Guid AccountId);
+        Guid AccountId,
+        Guid FirstSeededItemId);
 }
