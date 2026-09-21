@@ -462,21 +462,27 @@ public static class DiscoveryHiringEndpoints
             .RequirePermission(Permissions.JobApplications.Apply);
 
         app.MapGet("/api/discovery/applications", async (
+                int? page,
+                int? pageSize,
                 WriteDbContext dbContext,
                 IAccountContext accountContext,
                 CancellationToken cancellationToken) =>
                 Results.Ok(await ApplyToJobHandler.ListOwnAsync(
+                    page ?? 1, pageSize ?? ManageJobPostingsHandler.DefaultPageSize,
                     AccountOf(accountContext), dbContext, cancellationToken).ConfigureAwait(false)))
             .RequirePermission(Permissions.JobApplications.Apply);
 
         app.MapGet("/api/discovery/job-postings/{id:guid}/applications", async (
                 Guid id,
+                int? page,
+                int? pageSize,
                 WriteDbContext dbContext,
                 IAccountContext accountContext,
                 CancellationToken cancellationToken) =>
             {
                 var result = await ReviewApplicationsHandler.ListAsync(
-                    id, AccountOf(accountContext), dbContext, cancellationToken).ConfigureAwait(false);
+                    id, page ?? 1, pageSize ?? ManageJobPostingsHandler.DefaultPageSize,
+                    AccountOf(accountContext), dbContext, cancellationToken).ConfigureAwait(false);
                 return result.IsSuccess ? Results.Ok(result.Value) : ReviewFailure(result.Failure);
             })
             .RequirePermission(Permissions.JobApplications.Review);

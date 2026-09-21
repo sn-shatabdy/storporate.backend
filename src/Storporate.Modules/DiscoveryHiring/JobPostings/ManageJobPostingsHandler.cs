@@ -20,6 +20,15 @@ public static class ManageJobPostingsHandler
     /// <summary>Maximum items returned by the employer list endpoint.</summary>
     public const int MaxEmployerListItems = 100;
 
+    /// <summary>Default page size for the paged surfaces that follow the
+    /// STOR-66 fit-list convention (used by the student browse and the STOR-67
+    /// application lists — my-applications + employer applicant list).</summary>
+    public const int DefaultPageSize = 20;
+
+    /// <summary>Maximum page size callers may request via <c>pageSize</c>; values
+    /// above this clamp down to the cap.</summary>
+    public const int MaxPageSize = 100;
+
     /// <summary>Maximum items the student browse computes fit against before sorting + paging.</summary>
     public const int MaxFitCandidates = 300;
 

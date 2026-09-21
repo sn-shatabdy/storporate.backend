@@ -34,5 +34,17 @@ public sealed class JobApplicationConfiguration : IEntityTypeConfiguration<JobAp
         builder.HasIndex(application => new { application.JobPostingId, application.StudentAccountId }).IsUnique();
         builder.HasIndex(application => application.StudentAccountId);
         builder.HasIndex(application => new { application.JobPostingId, application.CreatedAt });
+
+        // Postgres xmin is a system column that increments on every UPDATE. Mapping it as a
+        // concurrency token gives read-modify-write protection at the row level: the second
+        // writer's SaveChanges throws DbUpdateConcurrencyException when its loaded token no
+        // longer matches the live row. The mapping is harmless under the InMemory provider
+        // (EF never reads xmin there) — endpoint tests still pass; live Postgres tests prove
+        // the second-writer path on status changes (STOR-67 Phase 1).
+        builder.Property<uint>("xmin")
+            .HasColumnName("xmin")
+            .HasColumnType("xid")
+            .ValueGeneratedOnAddOrUpdate()
+            .IsConcurrencyToken();
     }
 }
