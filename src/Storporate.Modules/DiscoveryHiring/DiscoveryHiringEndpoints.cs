@@ -5,6 +5,7 @@ using Storporate.Infrastructure.Auditing;
 using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.DiscoveryHiring.CandidateReview;
+using Storporate.Modules.DiscoveryHiring.JobApplications;
 using Storporate.Modules.DiscoveryHiring.JobPostings;
 using Storporate.Modules.DiscoveryHiring.SearchableProfile;
 using Storporate.Modules.DiscoveryHiring.TalentSearch;
@@ -286,6 +287,7 @@ public static class DiscoveryHiringEndpoints
             .RequirePermission(Permissions.CandidateReview.Read);
 
         MapJobPostingEndpoints(app);
+        MapJobApplicationEndpoints(app);
     }
 
     /// <summary>STOR-66: Organization posting management (<c>job-postings:manage</c>) and the
@@ -377,6 +379,7 @@ public static class DiscoveryHiringEndpoints
                 string? workMode,
                 string? q,
                 WriteDbContext dbContext,
+                IAccountContext accountContext,
                 CancellationToken cancellationToken) =>
             {
                 if (!string.IsNullOrWhiteSpace(kind) && !JobPostingKinds.All.Contains(kind))
@@ -392,19 +395,114 @@ public static class DiscoveryHiringEndpoints
                 }
 
                 return Results.Ok(await BrowseJobsHandler.ListAsync(
-                    kind, workMode, q, dbContext, cancellationToken).ConfigureAwait(false));
+                    kind, workMode, q, AccountOf(accountContext), dbContext, cancellationToken).ConfigureAwait(false));
             })
             .RequirePermission(Permissions.JobPostings.Read);
 
         app.MapGet("/api/discovery/jobs/{id:guid}", async (
                 Guid id,
                 WriteDbContext dbContext,
+                IAccountContext accountContext,
                 CancellationToken cancellationToken) =>
             {
-                var response = await BrowseJobsHandler.GetAsync(id, dbContext, cancellationToken).ConfigureAwait(false);
+                var response = await BrowseJobsHandler.GetAsync(id, AccountOf(accountContext), dbContext, cancellationToken)
+                    .ConfigureAwait(false);
                 return response is null ? NotFoundBody() : Results.Ok(response);
             })
             .RequirePermission(Permissions.JobPostings.Read);
+    }
+
+    /// <summary>STOR-67: Student applications (<c>job-applications:apply</c>) and Organization applicant
+    /// review (<c>job-applications:review</c>).</summary>
+    private static void MapJobApplicationEndpoints(WebApplication app)
+    {
+        static Guid AccountOf(IAccountContext accountContext) =>
+            accountContext.AccountId ?? accountContext.UserId!.Value;
+
+        static IResult PostingNotFound() => Results.NotFound(BuildErrorBody(
+            "job_posting_not_found",
+            "The job posting was not found."));
+
+        static IResult ReviewFailure(ReviewApplicationsHandler.Failure failure) =>
+            failure == ReviewApplicationsHandler.Failure.ApplicationNotFound
+                ? Results.NotFound(BuildErrorBody("application_not_found", "The application was not found."))
+                : PostingNotFound();
+
+        app.MapPost("/api/discovery/jobs/{jobId:guid}/applications", async (
+                Guid jobId,
+                ApplyToJobRequest? request,
+                IValidator<ApplyToJobRequest> validator,
+                WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
+                IAccountContext accountContext,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                request ??= new ApplyToJobRequest();
+                await validator.ValidateAndThrowAsync(request, cancellationToken).ConfigureAwait(false);
+                var response = await ApplyToJobHandler.ApplyAsync(
+                    jobId, request, AccountOf(accountContext), dbContext, auditLogWriter, timeProvider, cancellationToken)
+                    .ConfigureAwait(false);
+                return response is null
+                    ? PostingNotFound()
+                    : Results.Created($"/api/discovery/applications/{response.Id}", response);
+            })
+            .RequirePermission(Permissions.JobApplications.Apply);
+
+        app.MapGet("/api/discovery/applications", async (
+                WriteDbContext dbContext,
+                IAccountContext accountContext,
+                CancellationToken cancellationToken) =>
+                Results.Ok(await ApplyToJobHandler.ListOwnAsync(
+                    AccountOf(accountContext), dbContext, cancellationToken).ConfigureAwait(false)))
+            .RequirePermission(Permissions.JobApplications.Apply);
+
+        app.MapGet("/api/discovery/job-postings/{id:guid}/applications", async (
+                Guid id,
+                WriteDbContext dbContext,
+                IAccountContext accountContext,
+                CancellationToken cancellationToken) =>
+            {
+                var result = await ReviewApplicationsHandler.ListAsync(
+                    id, AccountOf(accountContext), dbContext, cancellationToken).ConfigureAwait(false);
+                return result.IsSuccess ? Results.Ok(result.Value) : ReviewFailure(result.Failure);
+            })
+            .RequirePermission(Permissions.JobApplications.Review);
+
+        app.MapGet("/api/discovery/job-postings/{id:guid}/applications/{applicationId:guid}", async (
+                Guid id,
+                Guid applicationId,
+                WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
+                IAccountContext accountContext,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                var result = await ReviewApplicationsHandler.GetAsync(
+                    id, applicationId, AccountOf(accountContext), dbContext, auditLogWriter, timeProvider, cancellationToken)
+                    .ConfigureAwait(false);
+                return result.IsSuccess ? Results.Ok(result.Value) : ReviewFailure(result.Failure);
+            })
+            .RequirePermission(Permissions.JobApplications.Review);
+
+        app.MapPost("/api/discovery/job-postings/{id:guid}/applications/{applicationId:guid}/status", async (
+                Guid id,
+                Guid applicationId,
+                ChangeApplicationStatusRequest request,
+                IValidator<ChangeApplicationStatusRequest> validator,
+                WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
+                IAccountContext accountContext,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                await validator.ValidateAndThrowAsync(request, cancellationToken).ConfigureAwait(false);
+                var result = await ReviewApplicationsHandler.ChangeStatusAsync(
+                    id, applicationId, request.Status!, AccountOf(accountContext), dbContext, auditLogWriter,
+                    timeProvider, cancellationToken).ConfigureAwait(false);
+                return result.IsSuccess ? Results.Ok(result.Value) : ReviewFailure(result.Failure);
+            })
+            .RequirePermission(Permissions.JobApplications.Review);
     }
 
     /// <summary>Build the standard two-field error body

@@ -101,6 +101,10 @@ public sealed class WriteDbContext : DbContext
     // Open postings owned by other accounts; owner scoping is done in the employer handlers.
     public DbSet<JobPosting> JobPostings => Set<JobPosting>();
 
+    // STOR-67: student applications. Non-tenant: the owning Organization reads the immutable
+    // snapshot; scoping is by student account (student side) and posting owner (employer side).
+    public DbSet<JobApplication> JobApplications => Set<JobApplication>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -125,6 +129,7 @@ public sealed class WriteDbContext : DbContext
         modelBuilder.ApplyConfiguration(new TalentIndexEntryConfiguration());
         modelBuilder.ApplyConfiguration(new TalentSearchRequestConfiguration());
         modelBuilder.ApplyConfiguration(new JobPostingConfiguration());
+        modelBuilder.ApplyConfiguration(new JobApplicationConfiguration());
 
         // Global query filter for every IAccountScoped entity type. We walk the model
         // once via reflection to discover which CLR types implement IAccountScoped,

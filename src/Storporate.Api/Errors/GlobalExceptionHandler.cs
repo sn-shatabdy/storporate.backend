@@ -61,6 +61,8 @@ public sealed class GlobalExceptionHandler(
                 (StatusCodes.Status409Conflict, new ErrorResponse("talent_search_busy", talentSearchBusyException.Message)),
             Storporate.Modules.DiscoveryHiring.Exceptions.JobPostingClosedException jobPostingClosedException =>
                 (StatusCodes.Status409Conflict, new ErrorResponse("job_posting_closed", jobPostingClosedException.Message)),
+            Storporate.Modules.DiscoveryHiring.Exceptions.ApplicationAlreadySubmittedException applicationAlreadySubmittedException =>
+                (StatusCodes.Status409Conflict, new ErrorResponse("application_already_submitted", applicationAlreadySubmittedException.Message)),
             Storporate.Modules.StudentGrowthExperience.Exceptions.ExplorationNotRetryableException explorationNotRetryableException =>
                 (StatusCodes.Status409Conflict, new ErrorResponse("exploration_not_retryable", explorationNotRetryableException.Message)),
             Storporate.Modules.StudentGrowthExperience.Exceptions.ExplorationLimitReachedException explorationLimitReachedException =>
