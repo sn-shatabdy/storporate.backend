@@ -151,6 +151,8 @@ public static class SystemRoles
             Permissions.CandidateReview.Read,
             // STOR-66: Organizations publish and manage their own job / internship postings.
             Permissions.JobPostings.Manage,
+            // STOR-67: Organizations review applicants to their own postings.
+            Permissions.JobApplications.Review,
         };
         var studentGrants = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -189,6 +191,8 @@ public static class SystemRoles
             Permissions.SearchableProfile.Update,
             // STOR-66: Students browse Open postings and see their skill fit.
             Permissions.JobPostings.Read,
+            // STOR-67: Students apply to postings and follow their applications.
+            Permissions.JobApplications.Apply,
         };
         var administrator = new HashSet<string>(Permissions.All, StringComparer.Ordinal);
         // The drill-down surface reads another student's TalentIndexEntry;

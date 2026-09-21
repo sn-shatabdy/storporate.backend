@@ -278,6 +278,21 @@ public static class Permissions
     }
 
     /// <summary>
+    /// Permissions governing student applications to postings (STOR-67). <see cref="Apply"/> is
+    /// Student-only (apply and list own applications); <see cref="Review"/> is Organization-only
+    /// (read applicants of own postings and shortlist / decline them). Administrator receives both
+    /// via <see cref="All"/>.
+    /// </summary>
+    public static class JobApplications
+    {
+        /// <summary>Apply to an Open posting and list the caller's own applications.</summary>
+        public const string Apply = "job-applications:apply";
+
+        /// <summary>Read applicants of the caller's own postings and set their status.</summary>
+        public const string Review = "job-applications:review";
+    }
+
+    /// <summary>
     /// Every permission literal defined across the nested classes above, deduped and
     /// ordinal-sorted. Built once via reflection at class-initialization time so adding a new
     /// nested class / const is automatically reflected here without a hand-edited list.

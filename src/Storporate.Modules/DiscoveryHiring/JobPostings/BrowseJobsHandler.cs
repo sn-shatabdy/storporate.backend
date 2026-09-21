@@ -23,6 +23,7 @@ public static class BrowseJobsHandler
         string? kind,
         string? workMode,
         string? query,
+        Guid accountId,
         WriteDbContext dbContext,
         CancellationToken cancellationToken)
     {
@@ -56,11 +57,22 @@ public static class BrowseJobsHandler
             .ConfigureAwait(false);
 
         var skills = await LoadStudentSkillsAsync(dbContext, cancellationToken).ConfigureAwait(false);
-        return new JobFitListResponse(rows.Select(p => ToFitResponse(p, skills)).ToList());
+        var ids = rows.Select(p => p.Id).ToList();
+        var applications = await dbContext.JobApplications
+            .AsNoTracking()
+            .Where(a => a.StudentAccountId == accountId && ids.Contains(a.JobPostingId))
+            .Select(a => new { a.JobPostingId, a.Id, a.Status })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var byPosting = applications.ToDictionary(a => a.JobPostingId, a => new JobFitApplicationResponse(a.Id, a.Status));
+        return new JobFitListResponse(rows
+            .Select(p => ToFitResponse(p, skills, byPosting.GetValueOrDefault(p.Id)))
+            .ToList());
     }
 
     public static async Task<JobFitResponse?> GetAsync(
         Guid id,
+        Guid accountId,
         WriteDbContext dbContext,
         CancellationToken cancellationToken)
     {
@@ -74,11 +86,17 @@ public static class BrowseJobsHandler
         }
 
         var skills = await LoadStudentSkillsAsync(dbContext, cancellationToken).ConfigureAwait(false);
-        return ToFitResponse(posting, skills);
+        var application = await dbContext.JobApplications
+            .AsNoTracking()
+            .Where(a => a.StudentAccountId == accountId && a.JobPostingId == id)
+            .Select(a => new JobFitApplicationResponse(a.Id, a.Status))
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return ToFitResponse(posting, skills, application);
     }
 
     /// <summary>Skill name (trimmed, case-insensitive) to the student's best band.</summary>
-    private static async Task<Dictionary<string, string>> LoadStudentSkillsAsync(
+    internal static async Task<Dictionary<string, string>> LoadStudentSkillsAsync(
         WriteDbContext dbContext,
         CancellationToken cancellationToken)
     {
@@ -114,7 +132,10 @@ public static class BrowseJobsHandler
         return best;
     }
 
-    private static JobFitResponse ToFitResponse(JobPosting p, Dictionary<string, string> studentSkills)
+    /// <summary>
+    /// The one fit computation, shared by browse and by the apply-time applicant snapshot (STOR-67).
+    /// </summary>
+    internal static JobFitDetailResponse ComputeFit(JobPosting p, Dictionary<string, string> studentSkills)
     {
         var required = JobPostingSkills.Deserialize(p.RequiredSkillsJson);
         var matched = new List<JobFitSkillResponse>();
@@ -132,12 +153,16 @@ public static class BrowseJobsHandler
         }
 
         var strong = matched.Count(m => m.Band == ConfidenceBands.Strong);
-        var fit = new JobFitDetailResponse(ComputeLabel(matched.Count, required.Count, strong), matched, missing);
-
-        return new JobFitResponse(
-            p.Id, p.Title, p.Kind, p.CompanyName, p.Location, p.WorkMode, p.Description,
-            required, p.Status, p.CreatedAt, p.UpdatedAt, fit);
+        return new JobFitDetailResponse(ComputeLabel(matched.Count, required.Count, strong), matched, missing);
     }
+
+    private static JobFitResponse ToFitResponse(
+        JobPosting p,
+        Dictionary<string, string> studentSkills,
+        JobFitApplicationResponse? application) => new(
+            p.Id, p.Title, p.Kind, p.CompanyName, p.Location, p.WorkMode, p.Description,
+            JobPostingSkills.Deserialize(p.RequiredSkillsJson), p.Status, p.CreatedAt, p.UpdatedAt,
+            ComputeFit(p, studentSkills), application);
 
     internal static string ComputeLabel(int matched, int total, int strong)
     {
