@@ -118,6 +118,7 @@ public static class ListPortfolioItemsHandler
                 item.CreatedAt,
                 item.AnalysisStatus,
                 item.LastAnalyzedAt,
+                item.ShareOriginalWithEmployers,
                 Skills: Array.Empty<PortfolioSkillPreview>()))
             .Skip(spec.Skip)
             .Take(spec.PageSize)

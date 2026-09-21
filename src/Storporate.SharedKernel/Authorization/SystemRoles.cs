@@ -109,6 +109,14 @@ public static class SystemRoles
             Permissions.Portfolio.Read,
             Permissions.Portfolio.Delete,
             Permissions.Portfolio.Retry,
+            // STOR-44 Phase 1: students are the only actors who toggle the
+            // per-item employer drill-down switch (PUT /api/portfolio/items/{id}/sharing);
+            // the Update verb exists specifically for that endpoint, so it lives
+            // exclusively in the Student grant set. Organizations and
+            // Administrators have no use for a per-item sharing control —
+            // the index entry they read in Phase 2 is a derived snapshot, not
+            // a row they mutate.
+            Permissions.Portfolio.Update,
             // STOR-40 Phase 1: the Student is the only actor type that uses the
             // advisor and feed surfaces, so the Student grant set widens here.
             // Advisor: full Create/Read/Update/Delete so the student can drive

@@ -112,11 +112,82 @@ public sealed class TalentIndexEntry
 /// <param name="Skills">The Strong / Developing skill findings for the item.
 /// Missing-band findings are deliberately excluded — the index only carries
 /// skills the student can claim.</param>
+/// <param name="Original">STOR-44 Phase 1: the per-item "where is the original?"
+/// descriptor that an Organization uses to drill down behind the index in
+/// Phase 2. Populated ONLY when the student explicitly opted this item in via
+/// <see cref="PortfolioItem.ShareOriginalWithEmployers"/>; null otherwise —
+/// which keeps the JSON shape lean (no <c>original</c> property at all for
+/// items the student kept private) and keeps existing stored snapshots
+/// (Phase 1 wrote no <c>original</c> property) deserialisable without
+/// migration.</param>
 public sealed record TalentIndexItemSnapshot(
     Guid PortfolioItemId,
     string Label,
     string Category,
-    IReadOnlyList<TalentIndexSkillSnapshot> Skills);
+    IReadOnlyList<TalentIndexSkillSnapshot> Skills,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] TalentIndexOriginalSnapshot? Original = null);
+
+/// <summary>STOR-44 Phase 1: the per-item "where is the original?" descriptor
+/// the refresh processor copies into <see cref="TalentIndexEntry.ItemsJson"/>
+/// when the student explicitly opted this item in via
+/// <see cref="PortfolioItem.ShareOriginalWithEmployers"/>.</summary>
+/// <remarks>
+/// <para>
+/// <b>Why a server-side copy of the storage key.</b> An Organization account
+/// cannot read <see cref="PortfolioItem"/> rows because the row-level-security
+/// policy blocks them. The whole point of the descriptor is to give a
+/// drill-down target — the storage key, or the external URL — without
+/// reading the private table. The processor reads the private row under
+/// the student's account scope and copies the relevant fields into this
+/// snapshot for Phase 2 to read under the Organization's account scope.
+/// </para>
+/// <para>
+/// <b>Why <see cref="FileName"/>, <see cref="ContentType"/>, and
+/// <see cref="SizeBytes"/> are nullable.</b> Only <see cref="Kind"/> and one
+/// of (<see cref="StorageKey"/> / <see cref="Url"/>) are required for the
+/// drill-down target. The other three are display hints an Organization
+/// endpoint can use to render a meaningful link/file row — but a Link
+/// submission has no file, so the File-only fields are null for those.
+/// </para>
+/// </remarks>
+/// <param name="Kind">One of <see cref="TalentIndexOriginalKinds.File"/> or
+/// <see cref="TalentIndexOriginalKinds.Link"/>.</param>
+/// <param name="FileName">The original uploaded file's filename, populated
+/// for File submissions only.</param>
+/// <param name="ContentType">The MIME content type of the uploaded file,
+/// populated for File submissions only.</param>
+/// <param name="SizeBytes">The size of the uploaded file in bytes, populated
+/// for File submissions only.</param>
+/// <param name="StorageKey">The <see cref="IArtifactStore"/> key for the upload,
+/// populated for File submissions only. Phase 2 will hand this to
+/// <see cref="IArtifactStore"/> through the Organization's account scope to
+/// stream the bytes.</param>
+/// <param name="Url">The external URL, populated for Link submissions only.</param>
+public sealed record TalentIndexOriginalSnapshot(
+    string Kind,
+    string? FileName,
+    string? ContentType,
+    long? SizeBytes,
+    string? StorageKey,
+    string? Url);
+
+/// <summary>Allowed values for <see cref="TalentIndexOriginalSnapshot.Kind"/>:
+/// <c>File</c> for portfolio items uploaded to <c>IArtifactStore</c>,
+/// <c>Link</c> for portfolio items whose original lives at an external URL.
+/// Mirrors <see cref="PortfolioSubmissionTypes"/>'s split so the processor's
+/// <c>PortfolioItem.SubmissionType == PortfolioSubmissionTypes.X</c> branch
+/// maps one-to-one onto the descriptor's <c>Kind</c>.</summary>
+public static class TalentIndexOriginalKinds
+{
+    public const string File = "File";
+    public const string Link = "Link";
+
+    public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
+    {
+        File,
+        Link,
+    };
+}
 
 /// <summary>Per-skill entry inside <see cref="TalentIndexItemSnapshot"/>.
 /// Carries the skill name, band, and AI-written reason; never carries item

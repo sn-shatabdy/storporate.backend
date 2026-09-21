@@ -302,6 +302,19 @@ public sealed class RefreshTalentIndexEntryProcessor : IBackgroundJobProcessor
     /// than <see cref="PortfolioAnalysisStatuses.Analyzed"/> are also
     /// excluded so the projection never carries a half-analyzed item.
     /// </summary>
+    /// <remarks>
+    /// STOR-44 Phase 1: also pulls the per-item submission metadata
+    /// (<see cref="PortfolioItem.SubmissionType"/>,
+    /// <see cref="PortfolioItem.StorageKey"/>,
+    /// <see cref="PortfolioItem.OriginalFileName"/>,
+    /// <see cref="PortfolioItem.ContentType"/>,
+    /// <see cref="PortfolioItem.FileSizeBytes"/>,
+    /// <see cref="PortfolioItem.ExternalUrl"/>) and the per-item
+    /// <see cref="PortfolioItem.ShareOriginalWithEmployers"/> flag. These
+    /// are server-side-only — the Organization that reads the snapshot
+    /// cannot read them directly because row-level security blocks
+    /// cross-account reads of <see cref="PortfolioItem"/> rows.
+    /// </remarks>
     private async Task<IReadOnlyList<QualifyingItem>> LoadQualifyingItemsAsync(
         Guid studentAccountId,
         CancellationToken cancellationToken)
@@ -317,6 +330,13 @@ public sealed class RefreshTalentIndexEntryProcessor : IBackgroundJobProcessor
                 item.Label,
                 item.Category,
                 item.CustomCategoryText,
+                item.SubmissionType,
+                item.StorageKey,
+                item.OriginalFileName,
+                item.ContentType,
+                item.FileSizeBytes,
+                item.ExternalUrl,
+                item.ShareOriginalWithEmployers,
             })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -357,6 +377,13 @@ public sealed class RefreshTalentIndexEntryProcessor : IBackgroundJobProcessor
                 CategoryDisplay: item.Category == PortfolioCategories.Other
                     ? item.CustomCategoryText ?? "Other"
                     : item.Category,
+                SubmissionType: item.SubmissionType,
+                StorageKey: item.StorageKey,
+                OriginalFileName: item.OriginalFileName,
+                ContentType: item.ContentType,
+                FileSizeBytes: item.FileSizeBytes,
+                ExternalUrl: item.ExternalUrl,
+                ShareOriginalWithEmployers: item.ShareOriginalWithEmployers,
                 Findings: itemFindings
                     .Select(f => new QualifyingSkill(f.SkillName, f.ConfidenceBand, f.Explanation))
                     .ToList()));
@@ -399,6 +426,15 @@ public sealed class RefreshTalentIndexEntryProcessor : IBackgroundJobProcessor
     /// projection. <see cref="TalentIndexEntry.DisplayName"/> is always
     /// populated (the validator blocks opt-in without one).
     /// </summary>
+    /// <remarks>
+    /// STOR-44 Phase 1: each item snapshot carries an <c>Original</c>
+    /// descriptor ONLY when the student flipped the per-item
+    /// <see cref="PortfolioItem.ShareOriginalWithEmployers"/> flag on. The
+    /// descriptor is the server-side copy of the submission metadata that an
+    /// Organization (Phase 2) uses to drill down to the original file or
+    /// link — the Organization can't read <see cref="PortfolioItem"/>
+    /// rows directly because row-level security blocks them.
+    /// </remarks>
     private static Projection BuildProjection(StudentSearchProfile profile, IReadOnlyList<QualifyingItem> items)
     {
         var displayName = profile.DisplayName;
@@ -417,7 +453,8 @@ public sealed class RefreshTalentIndexEntryProcessor : IBackgroundJobProcessor
                         Name: f.Name,
                         Band: f.Band,
                         Reason: f.Reason))
-                    .ToList()))
+                    .ToList(),
+                Original: BuildOriginalSnapshot(item)))
             .ToList();
 
         var itemsJson = JsonSerializer.Serialize(itemSnapshots, JsonOptions);
@@ -431,6 +468,49 @@ public sealed class RefreshTalentIndexEntryProcessor : IBackgroundJobProcessor
             StudyYear: studyYear,
             ItemsJson: itemsJson,
             SearchText: searchText);
+    }
+
+    /// <summary>
+    /// STOR-44 Phase 1: build the per-item drill-down descriptor. Returns
+    /// <see langword="null"/> when the student's per-item opt-in is off, so the
+    /// JSON shape carries no <c>original</c> property at all for items the
+    /// student kept private. For File submissions the descriptor carries the
+    /// filename / content type / size / storage key; for Link submissions it
+    /// carries just the URL.
+    /// </summary>
+    private static TalentIndexOriginalSnapshot? BuildOriginalSnapshot(QualifyingItem item)
+    {
+        if (!item.ShareOriginalWithEmployers)
+        {
+            return null;
+        }
+
+        if (item.SubmissionType == PortfolioSubmissionTypes.File)
+        {
+            return new TalentIndexOriginalSnapshot(
+                Kind: TalentIndexOriginalKinds.File,
+                FileName: item.OriginalFileName,
+                ContentType: item.ContentType,
+                SizeBytes: item.FileSizeBytes,
+                StorageKey: item.StorageKey,
+                Url: null);
+        }
+
+        if (item.SubmissionType == PortfolioSubmissionTypes.Link)
+        {
+            return new TalentIndexOriginalSnapshot(
+                Kind: TalentIndexOriginalKinds.Link,
+                FileName: null,
+                ContentType: null,
+                SizeBytes: null,
+                StorageKey: null,
+                Url: item.ExternalUrl);
+        }
+
+        // Unknown submission type: leave the descriptor off rather than
+        // surface an empty object. Mirrors the "no original property at all"
+        // posture for the opted-out case.
+        return null;
     }
 
     /// <summary>
@@ -501,8 +581,14 @@ public sealed class RefreshTalentIndexEntryProcessor : IBackgroundJobProcessor
     /// Compute the deterministic SHA-256 (lowercase hex) over the projection
     /// inputs. The hash is stored on the row so a re-run can short-circuit
     /// the embedding call when nothing changed. Includes the items-json
-    /// payload (so a finding-band change is detected) and the visible
-    /// profile fields (so a Show-flag flip is detected).
+    /// payload (so a finding-band change is detected), the visible
+    /// profile fields (so a Show-flag flip is detected), and — STOR-44
+    /// Phase 1 — the per-item drill-down descriptor (so a sharing toggle
+    /// forces a re-hash and triggers a fresh embedding call rather than a
+    /// silent skip). The descriptor's filename / URL / storage key are
+    /// hashed here but NEVER included in <see cref="BuildSearchText"/> —
+    /// the embedding input stays restricted to label / category / skill /
+    /// band as before.
     /// </summary>
     private static string ComputeContentHash(StudentSearchProfile profile, IReadOnlyList<QualifyingItem> items)
     {
@@ -522,6 +608,28 @@ public sealed class RefreshTalentIndexEntryProcessor : IBackgroundJobProcessor
             builder.Append("item:").Append(item.Id.ToString()).Append('|');
             builder.Append(item.Label).Append('|');
             builder.Append(item.CategoryDisplay).Append('|');
+            // STOR-44 Phase 1: feed the per-item sharing + descriptor into
+            // the content hash so a true→false or false→true toggle (and a
+            // change in the underlying file metadata) triggers a re-hash and
+            // therefore a fresh embedding call. The filename / URL / storage
+            // key are hashed here but explicitly excluded from SearchText
+            // (see BuildSearchText remarks).
+            builder.Append("share=").Append(item.ShareOriginalWithEmployers).Append('|');
+            var original = BuildOriginalSnapshot(item);
+            if (original is null)
+            {
+                builder.Append("original:null|");
+            }
+            else
+            {
+                builder.Append("original:kind=").Append(original.Kind)
+                    .Append("|fileName=").Append(original.FileName ?? string.Empty)
+                    .Append("|contentType=").Append(original.ContentType ?? string.Empty)
+                    .Append("|size=").Append(original.SizeBytes?.ToString(CultureInfo.InvariantCulture) ?? string.Empty)
+                    .Append("|storageKey=").Append(original.StorageKey ?? string.Empty)
+                    .Append("|url=").Append(original.Url ?? string.Empty)
+                    .Append('|');
+            }
             foreach (var skill in item.Findings)
             {
                 builder.Append("skill:").Append(skill.Name).Append('|');
@@ -556,10 +664,23 @@ public sealed class RefreshTalentIndexEntryProcessor : IBackgroundJobProcessor
     }
 
     /// <summary>One analyzed item whose findings are all Strong/Developing.</summary>
+    /// <remarks>
+    /// STOR-44 Phase 1: also carries the per-item submission metadata and the
+    /// <see cref="PortfolioItem.ShareOriginalWithEmployers"/> flag the
+    /// processor uses to decide whether to project a drill-down
+    /// <see cref="TalentIndexOriginalSnapshot"/>.
+    /// </remarks>
     private sealed record QualifyingItem(
         Guid Id,
         string Label,
         string CategoryDisplay,
+        string SubmissionType,
+        string? StorageKey,
+        string? OriginalFileName,
+        string? ContentType,
+        long? FileSizeBytes,
+        string? ExternalUrl,
+        bool ShareOriginalWithEmployers,
         IReadOnlyList<QualifyingSkill> Findings);
 
     private sealed record QualifyingSkill(string Name, string Band, string Reason);

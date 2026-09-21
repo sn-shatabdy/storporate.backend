@@ -44,4 +44,21 @@ public sealed class FailingTalentIndexRepository : ITalentIndexRepository
         int k,
         CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<TalentIndexSearchHit>>(Array.Empty<TalentIndexSearchHit>());
+
+    /// <summary>STOR-44 Phase 1: when the test wires this fake in for the
+    /// switch-off path, ClearOriginalAsync must throw too so the test
+    /// proves the flag stays true when the descriptor clear fails. The
+    /// counter lets the test assert "ClearOriginalAsync was attempted" so
+    /// the assertion is not vacuous.</summary>
+    public int ClearOriginalCallCount { get; private set; }
+
+    public Task ClearOriginalAsync(
+        Guid studentAccountId,
+        Guid portfolioItemId,
+        CancellationToken cancellationToken = default)
+    {
+        ClearOriginalCallCount++;
+        throw new InvalidOperationException(
+            $"Simulated ClearOriginal failure for student {studentAccountId}, item {portfolioItemId}.");
+    }
 }

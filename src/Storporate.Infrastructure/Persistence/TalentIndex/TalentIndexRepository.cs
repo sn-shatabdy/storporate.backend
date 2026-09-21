@@ -327,6 +327,173 @@ public sealed class TalentIndexRepository : ITalentIndexRepository
     }
 
     /// <inheritdoc />
+    public Task ClearOriginalAsync(
+        Guid studentAccountId,
+        Guid portfolioItemId,
+        CancellationToken cancellationToken = default)
+    {
+        return _isInMemoryProvider
+            ? ClearOriginalInMemoryAsync(studentAccountId, portfolioItemId)
+            : ClearOriginalPostgresAsync(studentAccountId, portfolioItemId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Postgres-side single-item descriptor clear. Uses <c>jsonb_agg</c> over
+    /// <c>jsonb_array_elements</c> to re-build <c>ItemsJson</c> with the
+    /// matching element's <c>original</c> key removed via the <c>jsonb -
+    /// text</c> subtraction operator. The <c>WHERE EXISTS</c> predicate
+    /// guards against touching rows that have no matching item or no
+    /// <c>original</c> key — a missing row, a missing item, and an item
+    /// without a descriptor are all silent no-ops, matching the documented
+    /// contract.
+    /// </summary>
+    private async Task ClearOriginalPostgresAsync(
+        Guid studentAccountId,
+        Guid portfolioItemId,
+        CancellationToken cancellationToken)
+    {
+        var connectionString = _connectionStrings.ToNpgsqlConnectionString();
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        // One statement, two passes:
+        //   1. jsonb_agg rebuilds the array, applying the `jsonb -
+        //      'original'` subtraction to the element whose
+        //      "portfolioItemId" matches the parameter. Elements with a
+        //      different id pass through unchanged.
+        //   2. WHERE EXISTS short-circuits the whole UPDATE when the
+        //      student has no row, no matching item, or the item has no
+        //      "original" key — those are silent no-ops.
+        // The other fields on the row are untouched (no re-embedding).
+        const string sql = """
+            UPDATE "TalentIndexEntries" AS t
+            SET "ItemsJson" = (
+                SELECT jsonb_agg(
+                    CASE
+                        WHEN (elem->>'portfolioItemId') = @portfolioItemId::text
+                            THEN elem - 'original'
+                        ELSE elem
+                    END
+                )
+                FROM jsonb_array_elements(t."ItemsJson") AS elem
+            )
+            WHERE t."StudentAccountId" = @studentAccountId
+              AND EXISTS (
+                  SELECT 1
+                  FROM jsonb_array_elements(t."ItemsJson") AS e(item)
+                  WHERE (item->>'portfolioItemId') = @portfolioItemId::text
+                        AND (item ? 'original')
+              );
+            """;
+
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.Add(new NpgsqlParameter("@studentAccountId", NpgsqlDbType.Uuid) { Value = studentAccountId });
+        command.Parameters.Add(new NpgsqlParameter("@portfolioItemId", NpgsqlDbType.Uuid) { Value = portfolioItemId });
+
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        _logger.LogDebug(
+            "Cleared original descriptor for portfolio item {PortfolioItemId} under student {StudentAccountId}.",
+            portfolioItemId,
+            studentAccountId);
+    }
+
+    /// <summary>
+    /// In-memory twin of <see cref="ClearOriginalPostgresAsync"/>. Walks the
+    /// stored <see cref="TalentIndexEntry.ItemsJson"/> JSON, finds the element
+    /// with the matching <c>portfolioItemId</c>, removes its <c>original</c>
+    /// property (if present), and re-serialises the array. Then mirrors the
+    /// change into the EF context so the unit suite's
+    /// <c>DbContext.TalentIndexEntries</c> query sees the updated blob.
+    /// </summary>
+    private async Task ClearOriginalInMemoryAsync(
+        Guid studentAccountId,
+        Guid portfolioItemId)
+    {
+        var store = GetOrAddInMemoryStore();
+        if (!store.Entries.TryGetValue(studentAccountId, out var entry))
+        {
+            return;
+        }
+
+        // Match the production jsonb_set behaviour: a missing element OR a
+        // missing "original" property is a no-op. Walk the array, rebuild it
+        // with the matching element's "original" stripped.
+        var snapshots = System.Text.Json.JsonSerializer.Deserialize<
+            List<System.Text.Json.JsonElement>>(entry.ItemsJson)
+            ?? new List<System.Text.Json.JsonElement>();
+
+        var portfolioItemIdString = portfolioItemId.ToString();
+        var mutated = false;
+        var rebuilt = new List<System.Text.Json.JsonElement>(snapshots.Count);
+        foreach (var element in snapshots)
+        {
+            var hasMatchingId = element.TryGetProperty("portfolioItemId", out var idProp)
+                && idProp.ValueKind == System.Text.Json.JsonValueKind.String
+                && string.Equals(idProp.GetString(), portfolioItemIdString, StringComparison.Ordinal);
+            if (hasMatchingId
+                && element.TryGetProperty("original", out _))
+            {
+                // Strip the "original" property by re-serialising the element
+                // without it. We do this by cloning the element's properties
+                // minus "original" into a fresh anonymous-shaped dictionary
+                // and re-parsing — JsonElement itself is read-only by design.
+                var pruned = PruneOriginalProperty(element);
+                rebuilt.Add(pruned);
+                mutated = true;
+            }
+            else
+            {
+                rebuilt.Add(element);
+            }
+        }
+
+        if (!mutated)
+        {
+            return;
+        }
+
+        var newItemsJson = System.Text.Json.JsonSerializer.Serialize(rebuilt);
+        var updated = entry with { ItemsJson = newItemsJson };
+        store.Entries[studentAccountId] = updated;
+
+        var existing = await _dbContext.TalentIndexEntries
+            .FirstOrDefaultAsync(e => e.StudentAccountId == studentAccountId)
+            .ConfigureAwait(false);
+        if (existing is not null)
+        {
+            existing.ItemsJson = newItemsJson;
+            await _dbContext.SaveChangesAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Clone a <see cref="System.Text.Json.JsonElement"/> into a new one with
+    /// the <c>original</c> property removed. Reads the element's own
+    /// properties via <see cref="System.Text.Json.JsonElement.EnumerateObject"/>
+    /// and writes them into a fresh dictionary, skipping the one we want to
+    /// strip. The result is round-tripped through <see cref="System.Text.Json.JsonSerializer"/>
+    /// so the caller gets a fresh <see cref="System.Text.Json.JsonElement"/> it can
+    /// keep alongside the others in the rebuilt list.
+    /// </summary>
+    private static System.Text.Json.JsonElement PruneOriginalProperty(
+        System.Text.Json.JsonElement element)
+    {
+        var dict = new Dictionary<string, System.Text.Json.JsonElement>(StringComparer.Ordinal);
+        foreach (var property in element.EnumerateObject())
+        {
+            if (string.Equals(property.Name, "original", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            dict[property.Name] = property.Value.Clone();
+        }
+        var serialized = System.Text.Json.JsonSerializer.Serialize(dict);
+        using var doc = System.Text.Json.JsonDocument.Parse(serialized);
+        return doc.RootElement.Clone();
+    }
+
+    /// <inheritdoc />
     public Task<IReadOnlyList<TalentIndexSearchHit>> SearchNearestAsync(
         IReadOnlyList<float> queryVector,
         int k,

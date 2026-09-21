@@ -100,6 +100,16 @@ public static class Permissions
         /// so a future read-only mentor persona can read a student's portfolio without
         /// gaining the ability to nudge the worker on the student's behalf.</summary>
         public const string Retry = "portfolio:retry";
+
+        /// <summary>STOR-44 Phase 1: update the per-item metadata of an existing
+        /// <see cref="Entities.PortfolioItem"/> owned by the caller's account — specifically
+        /// the drill-down <c>ShareOriginalWithEmployers</c> flag exposed via
+        /// <c>PUT /api/portfolio/items/{id}/sharing</c>. Split from <see cref="Read"/>
+        /// so a future read-only mentor persona can read a student's portfolio without
+        /// gaining the ability to flip the employer-visible sharing setting on the student's
+        /// behalf. Held by <see cref="SystemRoles.Student"/> only; Organizations and
+        /// Administrators have no use for the per-item employer-sharing surface.</summary>
+        public const string Update = "portfolio:update";
     }
 
     /// <summary>

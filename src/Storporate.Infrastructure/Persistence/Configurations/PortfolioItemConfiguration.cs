@@ -55,6 +55,14 @@ public sealed class PortfolioItemConfiguration : IEntityTypeConfiguration<Portfo
         builder.Property(item => item.Description)
             .HasColumnType("text");
 
+        // STOR-44 Phase 1: the student's per-item drill-down opt-in. The
+        // migration back-fills existing rows to `false` via a SQL DEFAULT,
+        // matching the documented "off by default" semantics — a student who
+        // hasn't reviewed this control yet has nothing exposed to employers.
+        builder.Property(item => item.ShareOriginalWithEmployers)
+            .IsRequired()
+            .HasDefaultValue(false);
+
         builder.Property(item => item.CreatedAt)
             .IsRequired();
 

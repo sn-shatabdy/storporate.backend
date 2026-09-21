@@ -34,6 +34,7 @@ public sealed record PortfolioItemResponse(
     DateTimeOffset CreatedAt,
     string AnalysisStatus,
     DateTimeOffset? LastAnalyzedAt,
+    bool ShareOriginalWithEmployers,
     IReadOnlyList<PortfolioSkillPreview> Skills);
 
 /// <summary>
