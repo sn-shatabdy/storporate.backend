@@ -153,6 +153,8 @@ public static class SystemRoles
             Permissions.JobPostings.Manage,
             // STOR-67: Organizations review applicants to their own postings.
             Permissions.JobApplications.Review,
+            // STOR-68: Organizations shortlist candidates and message them.
+            Permissions.Outreach.Send,
         };
         var studentGrants = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -193,6 +195,8 @@ public static class SystemRoles
             Permissions.JobPostings.Read,
             // STOR-67: Students apply to postings and follow their applications.
             Permissions.JobApplications.Apply,
+            // STOR-68: Students read and answer invitations from employers.
+            Permissions.Outreach.Respond,
         };
         var administrator = new HashSet<string>(Permissions.All, StringComparer.Ordinal);
         // The drill-down surface reads another student's TalentIndexEntry;

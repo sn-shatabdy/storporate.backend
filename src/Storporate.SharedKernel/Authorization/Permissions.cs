@@ -293,6 +293,21 @@ public static class Permissions
     }
 
     /// <summary>
+    /// Permissions governing employer-student outreach (STOR-68). <see cref="Send"/> is
+    /// Organization-only (shortlist candidates, invite them, message, read their side);
+    /// <see cref="Respond"/> is Student-only (inbox, reply, decline). Administrator receives both
+    /// via <see cref="All"/>.
+    /// </summary>
+    public static class Outreach
+    {
+        /// <summary>Shortlist candidates, send invitations and messages, and read the caller's own conversations.</summary>
+        public const string Send = "outreach:send";
+
+        /// <summary>Read the caller's inbox, reply to an invitation and decline it.</summary>
+        public const string Respond = "outreach:respond";
+    }
+
+    /// <summary>
     /// Every permission literal defined across the nested classes above, deduped and
     /// ordinal-sorted. Built once via reflection at class-initialization time so adding a new
     /// nested class / const is automatically reflected here without a hand-edited list.
