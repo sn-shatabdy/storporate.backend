@@ -7,6 +7,7 @@ using Storporate.Infrastructure.Llm;
 using Storporate.Infrastructure.Persistence;
 using Storporate.SharedKernel.Abstractions;
 using Storporate.SharedKernel.Entities;
+using Storporate.SharedKernel;
 
 namespace Storporate.Modules.Portfolio.Analysis;
 
@@ -481,6 +482,22 @@ public sealed class PortfolioAnalysisJobProcessor : IBackgroundJobProcessor
 
         portfolioItem.AnalysisStatus = PortfolioAnalysisStatuses.Analyzed;
         portfolioItem.LastAnalyzedAt = findingsCreatedAt;
+
+        // STOR-43 Phase 1: enqueue a talent-index refresh job in the same
+        // SaveChanges as the Analyzed flip. The helper short-circuits to
+        // Guid.Empty when the student isn't opted in, so non-searchable
+        // students incur no extra DB write beyond the lookup. The new job
+        // row is added to the change tracker here and committed atomically
+        // with the status flip below — a half-committed state
+        // (Analyzed + no refresh job for a searchable student) is
+        // structurally impossible.
+        await TalentIndexRefreshJobs
+            .EnqueueIfSearchableAsync(
+                _dbContext,
+                portfolioItem.AccountId,
+                nowUtc,
+                cancellationToken)
+            .ConfigureAwait(false);
 
         await _dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 

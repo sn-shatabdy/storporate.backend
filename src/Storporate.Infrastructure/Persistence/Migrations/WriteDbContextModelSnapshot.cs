@@ -585,6 +585,159 @@ namespace Storporate.Infrastructure.Persistence.Migrations
                     b.ToTable("StudentFeedEntries", (string)null);
                 });
 
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.StudentSearchProfile", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<string>("FieldOfStudy")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<string>("Headline")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<bool>("IsSearchable")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset?>("OptedInAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("ShowFieldOfStudy")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("ShowHeadline")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("ShowStudyYear")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("ShowUniversity")
+                        .HasColumnType("boolean");
+
+                    b.Property<int?>("StudyYear")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("University")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId")
+                        .IsUnique();
+
+                    b.ToTable("StudentSearchProfiles", (string)null);
+                });
+
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.TalentIndexEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ContentHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<string>("FieldOfStudy")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<string>("Headline")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<string>("ItemsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("SearchText")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("StudentAccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int?>("StudyYear")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("University")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StudentAccountId")
+                        .IsUnique();
+
+                    b.ToTable("TalentIndexEntries", (string)null);
+                });
+
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.TalentSearchRequest", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ErrorCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("QueryText")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<string>("ResultJson")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_TalentSearchRequests_AccountId")
+                        .HasFilter("\"Status\" = 'Pending'");
+
+                    b.ToTable("TalentSearchRequests", (string)null);
+                });
+
             modelBuilder.Entity("Storporate.SharedKernel.Entities.User", b =>
                 {
                     b.Property<Guid>("Id")
@@ -794,6 +947,17 @@ namespace Storporate.Infrastructure.Persistence.Migrations
                     b.Navigation("Account");
 
                     b.Navigation("FeedItem");
+                });
+
+            modelBuilder.Entity("Storporate.SharedKernel.Entities.TalentSearchRequest", b =>
+                {
+                    b.HasOne("Storporate.SharedKernel.Entities.User", "Account")
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Account");
                 });
 #pragma warning restore 612, 618
         }

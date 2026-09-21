@@ -32,4 +32,48 @@ public static class LlmServiceCollectionExtensions
 
         return services;
     }
+
+    /// <summary>
+    /// Registers the embedding client and its named <see cref="HttpClient"/>. Assumes
+    /// <see cref="BionicOptions"/> and <see cref="EmbeddingOptions"/> are already bound
+    /// (see the Options-pattern registration in <c>Program.cs</c>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why the chat and embeddings <see cref="HttpClient"/>s are split.</b>
+    /// The common case is that both endpoints live on the same local Bionic server, so
+    /// <see cref="EmbeddingOptions.BaseUrl"/> is empty and the embedding client just borrows
+    /// <see cref="LlmHttpClientNames.Bionic"/>. When the embedding endpoint is hosted
+    /// separately, the embedding client switches to
+    /// <see cref="LlmHttpClientNames.BionicEmbedding"/> with the embedding-specific
+    /// <see cref="EmbeddingOptions.BaseUrl"/>. Both names are registered unconditionally so
+    /// the runtime never has to ask the DI container for a name it doesn't have.
+    /// </para>
+    /// </remarks>
+    public static IServiceCollection AddBionicEmbeddings(this IServiceCollection services)
+    {
+        services.AddHttpClient(LlmHttpClientNames.BionicEmbedding, (serviceProvider, httpClient) =>
+        {
+            var bionicOptions = serviceProvider.GetRequiredService<IOptions<BionicOptions>>().Value;
+            var embeddingOptions = serviceProvider.GetRequiredService<IOptions<EmbeddingOptions>>().Value;
+
+            // When EmbeddingOptions.BaseUrl is empty the embedding client borrows the chat
+            // client's HttpClient (Bionic), so this second client is only configured with a
+            // real BaseAddress when a hosted embedding endpoint is in play.
+            var baseUrl = string.IsNullOrWhiteSpace(embeddingOptions.BaseUrl)
+                ? bionicOptions.BaseUrl
+                : embeddingOptions.BaseUrl;
+
+            httpClient.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/");
+
+            // Embedding requests return quickly (no chain-of-thought); 60s matches the chat
+            // timeout's outer envelope without being so generous that a hung server ties up a
+            // background-worker slot indefinitely.
+            httpClient.Timeout = TimeSpan.FromSeconds(60);
+        });
+
+        services.AddTransient<IEmbeddingClient, BionicEmbeddingClient>();
+
+        return services;
+    }
 }
