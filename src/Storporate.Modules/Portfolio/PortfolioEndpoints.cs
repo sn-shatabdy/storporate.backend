@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Routing;
 using Storporate.Infrastructure.Auditing;
 using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
+using Storporate.SharedKernel.Abstractions;
 using Storporate.SharedKernel.Authorization;
 using Storporate.SharedKernel.Storage;
 
@@ -136,6 +137,40 @@ public static class PortfolioEndpoints
                     : Results.NotFound();
             })
             .RequirePermission(Permissions.Portfolio.Delete);
+
+        // STOR-44 Phase 1: flip the per-item
+        // PortfolioItem.ShareOriginalWithEmployers flag the student uses to
+        // opt this one item into employer drill-down. The same-value case is
+        // a no-op that still returns 200; a real change enqueues a
+        // talent-index refresh job (and, on switch-off, clears the
+        // non-tenant descriptor first so a stale descriptor can never
+        // outlive the student's decision). Cross-account ids return 404 —
+        // never 403 — to mirror the existing delete handler's tenant-
+        // isolation posture.
+        app.MapPut("/api/portfolio/items/{id:guid}/sharing", async (
+                Guid id,
+                UpdatePortfolioItemSharingRequest request,
+                IValidator<UpdatePortfolioItemSharingRequest> validator,
+                WriteDbContext dbContext,
+                ITalentIndexRepository talentIndexRepository,
+                IAuditLogWriter auditLogWriter,
+                CancellationToken cancellationToken) =>
+            {
+                await validator.ValidateAndThrowAsync(request, cancellationToken).ConfigureAwait(false);
+
+                var outcome = await UpdatePortfolioItemSharingHandler.ExecuteAsync(
+                    id,
+                    request,
+                    dbContext,
+                    talentIndexRepository,
+                    auditLogWriter,
+                    cancellationToken).ConfigureAwait(false);
+
+                return outcome.NotFound
+                    ? Results.NotFound()
+                    : Results.Ok(outcome.Response);
+            })
+            .RequirePermission(Permissions.Portfolio.Update);
 
         // STOR-38 Phase 3: read the per-item AI analysis state for the Phase 5
         // evidence detail page. Tenant-isolated via the global query filter — a

@@ -71,15 +71,22 @@ public class PermissionServiceTests
     }
 
     [Fact]
-    public async Task HasPermissionAsync_AdministratorIsGrantedEveryPermissionInAll()
+    public async Task HasPermissionAsync_AdministratorIsGrantedEveryPermissionInAllExceptCarveouts()
     {
         await using var dbContext = CreateDbContext();
         var admin = SeedUser(dbContext, ActorTypes.Administrator);
         var service = new PermissionService(dbContext);
 
         // Walk Permissions.All (rather than hard-coding a literal) so this test stays
-        // green as new permissions land — exactly the property SystemRoles.Grants["Administrator"]
-        // promises to satisfy.
+        // green as new permissions land — exactly the property
+        // SystemRoles.Grants["Administrator"] promises to satisfy. The
+        // carve-out list
+        // (<see cref="SystemRoles.AdministratorExcludedFromAll"/>) is
+        // the deliberate narrowing of Administrator's reach for
+        // permissions whose surface must NOT be open to support /
+        // moderation (STOR-44 Phase 2: CandidateReview.Read reads OTHER
+        // students' TalentIndexEntry rows, which even Administrator's
+        // workspace-isolation bypass must not extend to).
         foreach (var permission in Permissions.All)
         {
             var granted = await service.HasPermissionAsync(
@@ -87,7 +94,15 @@ public class PermissionServiceTests
                 accountId: admin.Id,
                 permission,
                 CancellationToken.None);
-            Assert.True(granted, $"Administrator must be granted '{permission}'.");
+
+            if (SystemRoles.AdministratorExcludedFromAll.Contains(permission))
+            {
+                Assert.False(granted, $"Administrator must NOT be granted '{permission}' (on the carve-out list).");
+            }
+            else
+            {
+                Assert.True(granted, $"Administrator must be granted '{permission}'.");
+            }
         }
     }
 

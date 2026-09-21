@@ -89,6 +89,28 @@ public interface ITalentIndexRepository
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// STOR-44 Phase 1: remove the <c>original</c> descriptor of a single portfolio
+    /// item from the student's <see cref="Storporate.SharedKernel.Entities.TalentIndexEntry.ItemsJson"/>
+    /// without touching any other field on the entry. Used by the per-item drill-down
+    /// switching path so the moment a student toggles
+    /// <see cref="Storporate.SharedKernel.Entities.PortfolioItem.ShareOriginalWithEmployers"/>
+    /// from <see langword="true"/> to <see langword="false"/>, the corresponding
+    /// descriptor disappears from the non-tenant search index (which an Organization
+    /// will read in Phase 2 — the descriptor is the only path to the original file or link).
+    /// No-op when the entry or the item doesn't exist. No re-embedding: the descriptor
+    /// is metadata the employer endpoint reads; the search-text and vector are unchanged.
+    /// </summary>
+    /// <param name="studentAccountId">The owning student's
+    /// <see cref="Storporate.SharedKernel.Entities.User.Id"/>.</param>
+    /// <param name="portfolioItemId">The <see cref="Storporate.SharedKernel.Entities.PortfolioItem.Id"/>
+    /// whose descriptor should be removed.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task ClearOriginalAsync(
+        Guid studentAccountId,
+        Guid portfolioItemId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Return the ids of the <paramref name="k"/> nearest entries to
     /// <paramref name="queryVector"/>, ordered by ascending cosine distance.
     /// Ties are broken by ascending <c>Id</c>. An empty store returns an empty

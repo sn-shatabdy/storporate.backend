@@ -4,17 +4,20 @@ using Storporate.SharedKernel.Entities;
 namespace Storporate.Tests.Unit.SecurityGovernance;
 
 /// <summary>
-/// STOR-43 Phase 1 role-grant coverage. Locks down the four new permission strings and
-/// the per-role grant sets that depend on them — anything that would silently change who
-/// can run a talent search or read/write a student's opt-in profile. Companion to
+/// STOR-43 Phase 1 + STOR-44 Phase 2 role-grant coverage. Locks down the five employer-side
+/// permission strings (<see cref="Permissions.TalentSearch"/>.* +
+/// <see cref="Permissions.CandidateReview"/>.Read) and the two student-side strings
+/// (<see cref="Permissions.SearchableProfile"/>.*) and the per-role grant sets that depend on
+/// them — anything that would silently change who can run a talent search, drill down
+/// behind a result, or read/write a student's opt-in profile. Companion to
 /// <see cref="PermissionsTests"/> (which guards the catalog) and
 /// <see cref="PermissionServiceTests"/> (which guards the lookup path); this file is
-/// focused on the role-to-permission mapping itself so a future grant drift is caught
-/// here rather than as a downstream endpoint authorization surprise.
+/// focused on the role-to-permission mapping itself so a future grant drift is caught here
+/// rather than as a downstream endpoint authorization surprise.
 /// </summary>
 public class TalentSearchGrantsTests
 {
-    private static readonly IReadOnlyList<string> NewPermissionLiterals = new[]
+    private static readonly IReadOnlyList<string> Stor43Phase1Literals = new[]
     {
         "talent-search:create",
         "talent-search:read",
@@ -22,8 +25,13 @@ public class TalentSearchGrantsTests
         "searchable-profile:update",
     };
 
+    private static readonly IReadOnlyList<string> Stor44Phase2Literals = new[]
+    {
+        "candidate-review:read",
+    };
+
     [Fact]
-    public void Permissions_ExposesTheFourNewLiteralsExactly()
+    public void Permissions_ExposesTheFourStor43LiteralsExactly()
     {
         // Lock down the literal strings of the STOR-43 Phase 1 permissions so a typo /
         // rename on either the Permissions.TalentSearch.* or Permissions.SearchableProfile.*
@@ -33,6 +41,12 @@ public class TalentSearchGrantsTests
         Assert.Equal("talent-search:read", Permissions.TalentSearch.Read);
         Assert.Equal("searchable-profile:read", Permissions.SearchableProfile.Read);
         Assert.Equal("searchable-profile:update", Permissions.SearchableProfile.Update);
+
+        // STOR-44 Phase 2: the single CandidateReview constant is locked here too so a
+        // future rename of "candidate-review:read" is caught as a test failure rather
+        // than a silent contract change against the PolicyProvider + the
+        // DiscoveryHiringEndpoints wiring.
+        Assert.Equal("candidate-review:read", Permissions.CandidateReview.Read);
     }
 
     [Fact]
@@ -47,7 +61,7 @@ public class TalentSearchGrantsTests
         // grants depend on.
         var all = Permissions.All;
 
-        foreach (var literal in NewPermissionLiterals)
+        foreach (var literal in Stor43Phase1Literals)
         {
             Assert.Contains(literal, all);
         }
@@ -64,6 +78,14 @@ public class TalentSearchGrantsTests
         Assert.Equal(
             new[] { "searchable-profile:read", "searchable-profile:update" },
             searchableProfileLiterals.OrderBy(s => s, StringComparer.Ordinal).ToArray());
+
+        // STOR-44 Phase 2: the CandidateReview nested class currently owns exactly one
+        // permission (the GET review + GET original surface). Any future addition is
+        // caught here rather than silently widening an Administrator grant set.
+        var candidateReviewLiterals = all.Where(p => p.StartsWith("candidate-review:", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(
+            new[] { "candidate-review:read" },
+            candidateReviewLiterals.OrderBy(s => s, StringComparer.Ordinal).ToArray());
     }
 
     [Fact]
@@ -85,6 +107,36 @@ public class TalentSearchGrantsTests
 
         Assert.Contains(Permissions.Jobs.Read, organizationGrants);
         Assert.Contains(Permissions.Jobs.Write, organizationGrants);
+    }
+
+    [Fact]
+    public void Organization_GrantsCandidateReviewRead()
+    {
+        // STOR-44 Phase 2: only the hiring-side Organization reads a single candidate's
+        // TalentIndexEntry through the drill-down surface (review + original). The
+        // Organization grant set widens to include CandidateReview.Read here, on top of
+        // the TalentSearch.* and Jobs.* pair pinned by the test above. Lock the positive
+        // membership so this story cannot silently drop the grant.
+        var organizationGrants = SystemRoles.Grants[SystemRoles.Organization];
+
+        Assert.Contains(Permissions.CandidateReview.Read, organizationGrants);
+    }
+
+    [Fact]
+    public void Student_DoesNotGrantCandidateReviewRead()
+    {
+        // STOR-44 Phase 2: the drill-down surface reads OTHER students'
+        // TalentIndexEntry rows — a Student account must never get
+        // CandidateReview.Read because doing so would let a Student open
+        // another student's review summary and original stream. Lock the
+        // negative membership so a future story widening the Student grant
+        // set is forced to make a deliberate, reviewable change here.
+        var studentGrants = SystemRoles.Grants[SystemRoles.Student];
+
+        foreach (var literal in Stor44Phase2Literals)
+        {
+            Assert.DoesNotContain(literal, studentGrants);
+        }
     }
 
     [Fact]
@@ -112,7 +164,12 @@ public class TalentSearchGrantsTests
         // is forced to make a deliberate, reviewable change here.
         var universityGrants = SystemRoles.Grants[SystemRoles.University];
 
-        foreach (var literal in NewPermissionLiterals)
+        foreach (var literal in Stor43Phase1Literals)
+        {
+            Assert.DoesNotContain(literal, universityGrants);
+        }
+
+        foreach (var literal in Stor44Phase2Literals)
         {
             Assert.DoesNotContain(literal, universityGrants);
         }
@@ -126,26 +183,50 @@ public class TalentSearchGrantsTests
         // role's grant set is a reviewable, test-failing change.
         var clubGrants = SystemRoles.Grants[SystemRoles.Club];
 
-        foreach (var literal in NewPermissionLiterals)
+        foreach (var literal in Stor43Phase1Literals)
+        {
+            Assert.DoesNotContain(literal, clubGrants);
+        }
+
+        foreach (var literal in Stor44Phase2Literals)
         {
             Assert.DoesNotContain(literal, clubGrants);
         }
     }
 
     [Fact]
-    public void Administrator_GrantsAllFourNewPermissions()
+    public void Administrator_GrantsAllFourStor43Literals()
     {
-        // Administrator's grant set equals Permissions.All by construction (see
+        // Administrator's grant set starts as Permissions.All by construction (see
         // SystemRoles.BuildGrants). This test asserts the property the rest of the
-        // platform depends on — every new permission surfaces to the Administrator
-        // automatically — specifically against the four STOR-43 Phase 1 literals so a
-        // regression is reported against this story rather than as a generic
-        // "Administrator_GrantsExactlyEqualPermissionsAll" failure.
+        // platform depends on — every STOR-43 Phase 1 permission surfaces to the
+        // Administrator automatically — specifically against the four STOR-43
+        // Phase 1 literals so a regression is reported against this story rather than
+        // as a generic "Administrator_GrantsExactlyEqualPermissionsAll" failure.
         var administratorGrants = SystemRoles.Grants[SystemRoles.Administrator];
 
-        foreach (var literal in NewPermissionLiterals)
+        foreach (var literal in Stor43Phase1Literals)
         {
             Assert.Contains(literal, administratorGrants);
+        }
+    }
+
+    [Fact]
+    public void Administrator_DoesNotGrantCandidateReviewRead()
+    {
+        // STOR-44 Phase 2: the drill-down surface reads OTHER students'
+        // TalentIndexEntry rows. Even Administrator's workspace-isolation
+        // bypass does not extend to opening an employer-facing drill-down
+        // view on someone else's data — the permission is on the explicit
+        // SystemRoles.AdministratorExcludedFromAll carve-out. Lock the
+        // negative membership so a future story widening Administrator's
+        // reach has to make a deliberate, reviewable change in
+        // SystemRoles.cs.
+        var administratorGrants = SystemRoles.Grants[SystemRoles.Administrator];
+
+        foreach (var literal in Stor44Phase2Literals)
+        {
+            Assert.DoesNotContain(literal, administratorGrants);
         }
     }
 }

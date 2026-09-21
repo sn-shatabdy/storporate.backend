@@ -35,6 +35,7 @@ public partial class SyncTalentSearchRequestIndexes : Migration
                       AND tablename = 'TalentSearchRequests'
                       AND indexname = 'UX_TalentSearchRequests_AccountId_Pending'
                 ) THEN
+                    DROP INDEX IF EXISTS "IX_TalentSearchRequests_AccountId";
                     ALTER INDEX "UX_TalentSearchRequests_AccountId_Pending"
                         RENAME TO "IX_TalentSearchRequests_AccountId";
                 END IF;

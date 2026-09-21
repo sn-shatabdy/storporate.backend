@@ -91,4 +91,16 @@ public sealed class PortfolioItem : IAccountScoped
     /// <c>Analyzing</c> / <c>Failed</c> / <c>Unsupported</c>. The portfolio list page sorts
     /// by this descending (after <see cref="CreatedAt"/>) when present.</summary>
     public DateTimeOffset? LastAnalyzedAt { get; set; }
+
+    /// <summary>STOR-44 Phase 1: the student's per-item opt-in to employer drill-down.
+    /// When true, an employer who has surfaced this item in a talent search (Phase 2) is
+    /// permitted to open the original file or follow the original link behind the claim.
+    /// Defaults to <see langword="false"/>; the migration back-fills existing rows to the
+    /// same default. The student toggles this flag via
+    /// <c>PUT /api/portfolio/items/{id}/sharing</c>. The flag is independent of
+    /// <see cref="Entities.StudentSearchProfile.IsSearchable"/> — a student who has not opted
+    /// in to employer search can still set this on individual items without effect (no index
+    /// entry exists yet to carry the descriptor), and an opted-in student can leave the
+    /// flag off to keep this one item private while the rest are shared.</summary>
+    public bool ShareOriginalWithEmployers { get; set; }
 }

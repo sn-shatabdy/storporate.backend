@@ -25,7 +25,8 @@ public sealed record CreatePortfolioItemResponse(
     string? Description,
     DateTimeOffset CreatedAt,
     string AnalysisStatus,
-    DateTimeOffset? LastAnalyzedAt)
+    DateTimeOffset? LastAnalyzedAt,
+    bool ShareOriginalWithEmployers)
 {
     public static CreatePortfolioItemResponse FromEntity(PortfolioItem item) =>
         new(
@@ -41,5 +42,6 @@ public sealed record CreatePortfolioItemResponse(
             item.Description,
             item.CreatedAt,
             item.AnalysisStatus,
-            item.LastAnalyzedAt);
+            item.LastAnalyzedAt,
+            item.ShareOriginalWithEmployers);
 }

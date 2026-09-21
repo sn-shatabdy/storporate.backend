@@ -119,15 +119,26 @@ public class PermissionAuthorizationHandlerTests
     }
 
     [Fact]
-    public async Task HandleAsync_AdministratorBypass_DoesNotRecordPermissionDenied()
+    public async Task HandleAsync_AdministratorBypass_DelegatesToPermissionService()
     {
-        // Administrator callers short-circuit before the permission check runs (see the
-        // existing handler doc comment), so they must NOT produce a "permission_denied"
-        // row. Without this test, a future refactor that accidentally moved the audit
-        // write ahead of the Administrator bypass would start spamming the audit log
-        // every time an Administrator hits any [RequirePermission]-tagged endpoint.
+        // STOR-44 Phase 2 moved the Administrator workspace-isolation
+        // bypass out of the handler and into
+        // <see cref="Storporate.Modules.SecurityGovernance.IPermissionService"/>.
+        // Administrator callers now go through the same HasPermissionAsync
+        // path every other role uses — the bypass is implemented by the
+        // Administrator grant set starting as Permissions.All by
+        // construction (minus
+        // <see cref="Storporate.SharedKernel.Authorization.SystemRoles.AdministratorExcludedFromAll"/>).
+        // This test pins the new contract: the handler delegates to
+        // PermissionService, and a permission that the service DOES grant
+        // succeeds without producing a "permission_denied" audit row.
+        // The companion "carve-out" behaviour — Administrator does NOT
+        // get a permission on the excluded list, even though it lives in
+        // Permissions.All — is covered by the
+        // <see cref="Storporate.Tests.Unit.SecurityGovernance.PermissionServiceTests"/>
+        // suite and the live CandidateReviewEndpointsTests admin tests.
         var accountContext = new FakeAccountContext { UserId = Guid.NewGuid(), IsAdministrator = true };
-        var permissionService = new FakePermissionService { HasPermissionResult = false };
+        var permissionService = new FakePermissionService { HasPermissionResult = true };
         var auditLogWriter = new FakeAuditLogWriter();
         var httpContextAccessor = new FakeHttpContextAccessor();
         var handler = new PermissionAuthorizationHandler(
@@ -144,8 +155,11 @@ public class PermissionAuthorizationHandlerTests
         Assert.True(handlerContext.HasSucceeded);
         Assert.Empty(auditLogWriter.Recorded);
 
-        // PermissionService must not have been consulted on the Administrator short-circuit.
-        Assert.Equal(0, permissionService.CallCount);
+        // PermissionService IS consulted now — the bypass is implemented
+        // by the service's grant-set construction, not by a handler
+        // short-circuit. A future refactor that drops the call would
+        // be caught here.
+        Assert.Equal(1, permissionService.CallCount);
     }
 
     /// <summary>

@@ -47,6 +47,7 @@ namespace Storporate.Tests.Unit.TalentIndex;
 /// run's assertion.
 /// </para>
 /// </remarks>
+[Collection("LivePg")]
 public class TalentIndexRepositoryPostgresTests
 {
     private const string LivePgEnvVar = "STORPORATE_TEST_PG";
