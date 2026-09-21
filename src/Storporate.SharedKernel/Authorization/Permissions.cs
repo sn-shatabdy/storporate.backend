@@ -322,6 +322,21 @@ public static class Permissions
     }
 
     /// <summary>
+    /// Permissions governing company sponsorship goals (STOR-70). <see cref="Manage"/> is
+    /// Organization-only (create, edit, pause and delete the caller's own goal sets);
+    /// <see cref="Read"/> is Club-only (read Active goal sets). Administrator receives both via
+    /// <see cref="All"/>.
+    /// </summary>
+    public static class SponsorshipGoals
+    {
+        /// <summary>Create, edit, pause and delete the caller's own sponsorship goal sets.</summary>
+        public const string Manage = "sponsorship-goals:manage";
+
+        /// <summary>Read Active company sponsorship goal sets.</summary>
+        public const string Read = "sponsorship-goals:read";
+    }
+
+    /// <summary>
     /// Every permission literal defined across the nested classes above, deduped and
     /// ordinal-sorted. Built once via reflection at class-initialization time so adding a new
     /// nested class / const is automatically reflected here without a hand-edited list.
