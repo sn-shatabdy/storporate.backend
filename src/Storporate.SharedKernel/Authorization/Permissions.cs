@@ -263,6 +263,21 @@ public static class Permissions
     }
 
     /// <summary>
+    /// Permissions governing job and internship postings (STOR-66). <see cref="Manage"/> is the
+    /// Organization-side publish / edit / pause / reopen / close surface; <see cref="Read"/> is the
+    /// Student-side browse surface over Open postings. Administrator receives both via
+    /// <see cref="All"/>.
+    /// </summary>
+    public static class JobPostings
+    {
+        /// <summary>Create, edit, list and change the status of the caller's own postings.</summary>
+        public const string Manage = "job-postings:manage";
+
+        /// <summary>Browse Open postings and see how well each fits the caller's skills.</summary>
+        public const string Read = "job-postings:read";
+    }
+
+    /// <summary>
     /// Every permission literal defined across the nested classes above, deduped and
     /// ordinal-sorted. Built once via reflection at class-initialization time so adding a new
     /// nested class / const is automatically reflected here without a hand-edited list.

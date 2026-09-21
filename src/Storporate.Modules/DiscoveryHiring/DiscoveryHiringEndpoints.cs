@@ -5,10 +5,12 @@ using Storporate.Infrastructure.Auditing;
 using Storporate.Infrastructure.Authorization;
 using Storporate.Infrastructure.Persistence;
 using Storporate.Modules.DiscoveryHiring.CandidateReview;
+using Storporate.Modules.DiscoveryHiring.JobPostings;
 using Storporate.Modules.DiscoveryHiring.SearchableProfile;
 using Storporate.Modules.DiscoveryHiring.TalentSearch;
 using Storporate.SharedKernel.Abstractions;
 using Storporate.SharedKernel.Authorization;
+using Storporate.SharedKernel.Entities;
 using Storporate.SharedKernel.Storage;
 
 namespace Storporate.Modules.DiscoveryHiring;
@@ -282,6 +284,127 @@ public static class DiscoveryHiringEndpoints
                     "The candidate was not found."));
             })
             .RequirePermission(Permissions.CandidateReview.Read);
+
+        MapJobPostingEndpoints(app);
+    }
+
+    /// <summary>STOR-66: Organization posting management (<c>job-postings:manage</c>) and the
+    /// Student browse surface (<c>job-postings:read</c>).</summary>
+    private static void MapJobPostingEndpoints(WebApplication app)
+    {
+        static Guid AccountOf(IAccountContext accountContext) =>
+            accountContext.AccountId ?? accountContext.UserId!.Value;
+
+        static IResult NotFoundBody() => Results.NotFound(BuildErrorBody(
+            "job_posting_not_found",
+            "The job posting was not found."));
+
+        app.MapPost("/api/discovery/job-postings", async (
+                SaveJobPostingRequest request,
+                IValidator<SaveJobPostingRequest> validator,
+                WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
+                IAccountContext accountContext,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                await validator.ValidateAndThrowAsync(request, cancellationToken).ConfigureAwait(false);
+                var response = await ManageJobPostingsHandler.CreateAsync(
+                    request, AccountOf(accountContext), dbContext, auditLogWriter, timeProvider, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Created($"/api/discovery/job-postings/{response.Id}", response);
+            })
+            .RequirePermission(Permissions.JobPostings.Manage);
+
+        app.MapGet("/api/discovery/job-postings", async (
+                WriteDbContext dbContext,
+                IAccountContext accountContext,
+                CancellationToken cancellationToken) =>
+                Results.Ok(await ManageJobPostingsHandler.ListAsync(
+                    AccountOf(accountContext), dbContext, cancellationToken).ConfigureAwait(false)))
+            .RequirePermission(Permissions.JobPostings.Manage);
+
+        app.MapGet("/api/discovery/job-postings/{id:guid}", async (
+                Guid id,
+                WriteDbContext dbContext,
+                IAccountContext accountContext,
+                CancellationToken cancellationToken) =>
+            {
+                var response = await ManageJobPostingsHandler.GetAsync(
+                    id, AccountOf(accountContext), dbContext, cancellationToken).ConfigureAwait(false);
+                return response is null ? NotFoundBody() : Results.Ok(response);
+            })
+            .RequirePermission(Permissions.JobPostings.Manage);
+
+        app.MapPut("/api/discovery/job-postings/{id:guid}", async (
+                Guid id,
+                SaveJobPostingRequest request,
+                IValidator<SaveJobPostingRequest> validator,
+                WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
+                IAccountContext accountContext,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                await validator.ValidateAndThrowAsync(request, cancellationToken).ConfigureAwait(false);
+                var response = await ManageJobPostingsHandler.UpdateAsync(
+                    id, request, AccountOf(accountContext), dbContext, auditLogWriter, timeProvider, cancellationToken)
+                    .ConfigureAwait(false);
+                return response is null ? NotFoundBody() : Results.Ok(response);
+            })
+            .RequirePermission(Permissions.JobPostings.Manage);
+
+        app.MapPost("/api/discovery/job-postings/{id:guid}/status", async (
+                Guid id,
+                ChangeJobPostingStatusRequest request,
+                IValidator<ChangeJobPostingStatusRequest> validator,
+                WriteDbContext dbContext,
+                IAuditLogWriter auditLogWriter,
+                IAccountContext accountContext,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                await validator.ValidateAndThrowAsync(request, cancellationToken).ConfigureAwait(false);
+                var response = await ManageJobPostingsHandler.ChangeStatusAsync(
+                    id, request.Status!, AccountOf(accountContext), dbContext, auditLogWriter, timeProvider, cancellationToken)
+                    .ConfigureAwait(false);
+                return response is null ? NotFoundBody() : Results.Ok(response);
+            })
+            .RequirePermission(Permissions.JobPostings.Manage);
+
+        app.MapGet("/api/discovery/jobs", async (
+                string? kind,
+                string? workMode,
+                string? q,
+                WriteDbContext dbContext,
+                CancellationToken cancellationToken) =>
+            {
+                if (!string.IsNullOrWhiteSpace(kind) && !JobPostingKinds.All.Contains(kind))
+                {
+                    return Results.BadRequest(BuildErrorBody(
+                        "job_posting_kind_invalid", "Kind must be Job or Internship."));
+                }
+
+                if (!string.IsNullOrWhiteSpace(workMode) && !JobPostingWorkModes.All.Contains(workMode))
+                {
+                    return Results.BadRequest(BuildErrorBody(
+                        "job_posting_work_mode_invalid", "Work mode must be OnSite, Remote or Hybrid."));
+                }
+
+                return Results.Ok(await BrowseJobsHandler.ListAsync(
+                    kind, workMode, q, dbContext, cancellationToken).ConfigureAwait(false));
+            })
+            .RequirePermission(Permissions.JobPostings.Read);
+
+        app.MapGet("/api/discovery/jobs/{id:guid}", async (
+                Guid id,
+                WriteDbContext dbContext,
+                CancellationToken cancellationToken) =>
+            {
+                var response = await BrowseJobsHandler.GetAsync(id, dbContext, cancellationToken).ConfigureAwait(false);
+                return response is null ? NotFoundBody() : Results.Ok(response);
+            })
+            .RequirePermission(Permissions.JobPostings.Read);
     }
 
     /// <summary>Build the standard two-field error body

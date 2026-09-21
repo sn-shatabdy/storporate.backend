@@ -97,6 +97,10 @@ public sealed class WriteDbContext : DbContext
     // busy-check lookup on POST, nor the GET endpoint's id lookup.
     public DbSet<TalentSearchRequest> TalentSearchRequests => Set<TalentSearchRequest>();
 
+    // STOR-66: job / internship postings. Deliberately NOT IAccountScoped — students read
+    // Open postings owned by other accounts; owner scoping is done in the employer handlers.
+    public DbSet<JobPosting> JobPostings => Set<JobPosting>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -120,6 +124,7 @@ public sealed class WriteDbContext : DbContext
         modelBuilder.ApplyConfiguration(new StudentSearchProfileConfiguration());
         modelBuilder.ApplyConfiguration(new TalentIndexEntryConfiguration());
         modelBuilder.ApplyConfiguration(new TalentSearchRequestConfiguration());
+        modelBuilder.ApplyConfiguration(new JobPostingConfiguration());
 
         // Global query filter for every IAccountScoped entity type. We walk the model
         // once via reflection to discover which CLR types implement IAccountScoped,
