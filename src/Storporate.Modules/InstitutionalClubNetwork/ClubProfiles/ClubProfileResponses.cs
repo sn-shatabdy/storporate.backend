@@ -27,6 +27,14 @@ public sealed record ClubProfileResponse(
     DateTimeOffset UpdatedAt,
     DateTimeOffset? PublishedAt);
 
+/// <summary>Aggregate min/max typical attendance across a club's events. Both null when no event carries a value.</summary>
+public sealed record ClubEventAttendanceSummary(int? Min, int? Max);
+
+/// <summary>Company-side browse summary (STOR-69). Enriched in the redo to support an
+/// "audience snapshot" glance: founded year, audience study years, event attendance range,
+/// and the union of all events' support needs. Existing fields kept intact for STOR-71
+/// matcher compatibility (the match-card surface reads the same <c>name</c>, <c>university</c>,
+/// etc.).</summary>
 public sealed record ClubSummaryResponse(
     Guid Id,
     string Name,
@@ -34,6 +42,15 @@ public sealed record ClubSummaryResponse(
     string University,
     int MemberCount,
     IReadOnlyList<string> FieldsOfStudy,
-    int EventCount);
+    int EventCount,
+    int? FoundedYear,
+    IReadOnlyList<int> AudienceYears,
+    ClubEventAttendanceSummary EventAttendanceSummary,
+    IReadOnlyList<string> SupportNeeds);
 
-public sealed record ClubListResponse(IReadOnlyList<ClubSummaryResponse> Items);
+/// <summary>
+/// Browse response. <see cref="Total"/> is the count of all matching rows before the
+/// <c>Take(MaxResults)</c> truncation, so the client can show a "showing N of total" affordance
+/// when the result was truncated.
+/// </summary>
+public sealed record ClubListResponse(IReadOnlyList<ClubSummaryResponse> Items, int Total);

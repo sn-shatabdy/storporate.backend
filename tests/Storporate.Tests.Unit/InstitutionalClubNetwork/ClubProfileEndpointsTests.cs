@@ -299,9 +299,27 @@ public class ClubProfileEndpointsTests : IClassFixture<DiscoveryHiringEndpointsF
         Assert.Equal("Dhaka University", alpha.University);
         Assert.Equal(120, alpha.MemberCount);
 
+        // STOR-69 redo Phase 1: the summary now also carries FoundedYear,
+        // AudienceYears (sorted/deduped, same as the detail response),
+        // EventAttendanceSummary, and SupportNeeds (deduped/sorted across events).
+        // ValidBody leaves FoundedYear null and the default AudienceYears [1,2,3]
+        // and no events for the gamma/betac lubs; Alpha has two default events so
+        // its attendance range collapses to {50,50} and its support needs collapse
+        // to the single value {"Funding"} (the EventBody helper's default).
+        Assert.Null(alpha.FoundedYear);
+        Assert.Equal(new[] { 1, 2, 3 }, alpha.AudienceYears);
+        Assert.Equal(new ClubEventAttendanceSummary(50, 50), alpha.EventAttendanceSummary);
+        Assert.Equal(new[] { "Funding" }, alpha.SupportNeeds);
+
+        // The list response now also carries a Total count of all matching rows.
+        Assert.Equal(2, list.Total);
+
         using var doc = JsonDocument.Parse(await org.GetStringAsync($"/api/clubs?q={suffix}"));
         var names = doc.RootElement.GetProperty("items")[0].EnumerateObject().Select(p => p.Name).OrderBy(n => n).ToArray();
-        Assert.Equal(new[] { "eventCount", "fieldsOfStudy", "id", "memberCount", "name", "tagline", "university" }, names);
+        Assert.Equal(
+            new[] { "audienceYears", "eventAttendanceSummary", "eventCount", "fieldsOfStudy", "foundedYear", "id", "memberCount", "name", "supportNeeds", "tagline", "university" },
+            names);
+        Assert.Equal(2, doc.RootElement.GetProperty("total").GetInt32());
     }
 
     [Fact]
@@ -335,6 +353,67 @@ public class ClubProfileEndpointsTests : IClassFixture<DiscoveryHiringEndpointsF
         Assert.Equal(new[] { p2.Id }, await Ids($"q={suffix}&university=brac%20{suffix}"));
         Assert.Empty(await Ids($"q={suffix}&field=Math")); // exact match, not substring
         Assert.Empty(await Ids($"q=does-not-exist-{suffix}"));
+    }
+
+    [Fact]
+    public async Task Browse_WithMoreThanMaxResults_ReturnsTruncatedItemsAndFullTotal()
+    {
+        // STOR-69 redo Phase 1: BrowseClubsHandler returns at most MaxResults (50) items
+        // but surfaces the unfiltered count as Total so the caller can render a
+        // "showing N of total" affordance. Seed 55 Published clubs with a unique
+        // query suffix so the assertion is contained.
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        using var org = await ClientForAsync(await SeedUserAsync(ActorTypes.Organization));
+
+        const int seeded = 55;
+        var ids = new List<Guid>(seeded);
+        for (var i = 0; i < seeded; i++)
+        {
+            using var clubClient = await ClientForAsync(await SeedUserAsync(ActorTypes.Club));
+            var body = ValidBody($"Truncation {suffix} #{i:00}");
+            var saved = await SaveAsync(clubClient, body);
+            await PostProfileActionAsync(clubClient, "publish");
+            ids.Add(saved.Id);
+        }
+
+        var list = (await org.GetFromJsonAsync<ClubListResponse>($"/api/clubs?q=Truncation%20{suffix}", JsonOptions))!;
+        Assert.Equal(BrowseClubsHandler.MaxResults, list.Items.Count);
+        Assert.Equal(seeded, list.Total);
+    }
+
+    [Fact]
+    public async Task Browse_Summary_AudienceSnapshotFieldsPopulated_FromClubAndEvents()
+    {
+        // STOR-69 redo Phase 1 acceptance criterion: a club with foundedYear 2019,
+        // audience years [2,3,4], and two events with distinct typical attendance and
+        // overlapping support needs produces foundedYear=2019, audienceYears=[2,3,4],
+        // eventAttendanceSummary={min:40,max:120}, supportNeeds=["Catering","Venue","Volunteers"]
+        // (deduped case-insensitively and sorted).
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        using var clubClient = await ClientForAsync(await SeedUserAsync(ActorTypes.Club));
+        using var org = await ClientForAsync(await SeedUserAsync(ActorTypes.Organization));
+
+        var body = ValidBody($"Snapshot {suffix}");
+        body["foundedYear"] = 2019;
+        body["audience"] = new { fieldsOfStudy = new[] { "Computer Science" }, years = new[] { 4, 2, 3, 3 } };
+        body["events"] = new object[]
+        {
+            EventBody("Big Event", attendance: 120, support: new[] { "Venue", "Volunteers" }),
+            EventBody("Small Event", attendance: 40, support: new[] { "Venue", "Food and drink" }),
+        };
+
+        var saveResp = await clubClient.PutAsJsonAsync("/api/clubs/profile", body);
+        Assert.True(saveResp.IsSuccessStatusCode, $"Save failed with {saveResp.StatusCode}: {await saveResp.Content.ReadAsStringAsync()}");
+        await PostProfileActionAsync(clubClient, "publish");
+
+        var list = (await org.GetFromJsonAsync<ClubListResponse>($"/api/clubs?q=Snapshot%20{suffix}", JsonOptions))!;
+        var summary = Assert.Single(list.Items);
+
+        Assert.Equal(2019, summary.FoundedYear);
+        Assert.Equal(new[] { 2, 3, 4 }, summary.AudienceYears);
+        Assert.Equal(new ClubEventAttendanceSummary(40, 120), summary.EventAttendanceSummary);
+        Assert.Equal(new[] { "Food and drink", "Venue", "Volunteers" }, summary.SupportNeeds);
+        Assert.Equal(1, list.Total);
     }
 
     [Fact]

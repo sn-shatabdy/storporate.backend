@@ -39,5 +39,19 @@ public sealed class ClubProfileConfiguration : IEntityTypeConfiguration<ClubProf
 
         builder.HasIndex(profile => profile.OwnerAccountId).IsUnique();
         builder.HasIndex(profile => new { profile.Status, profile.University });
+
+        // Postgres xmin is a system column that increments on every UPDATE. Mapping it as a
+        // concurrency token gives read-modify-write protection at the row level: the second
+        // writer's SaveChanges throws DbUpdateConcurrencyException when its loaded token no
+        // longer matches the live row. The mapping is harmless under the InMemory provider
+        // (EF never reads xmin there) — endpoint tests still pass; live Postgres tests prove
+        // the second-writer path. STOR-69 redo adds this to ClubProfile after STOR-66 added it
+        // to JobPosting; the global handler maps DbUpdateConcurrencyException to 409
+        // club_profile_conflict via ManageClubProfileHandler.SaveAsync.
+        builder.Property<uint>("xmin")
+            .HasColumnName("xmin")
+            .HasColumnType("xid")
+            .ValueGeneratedOnAddOrUpdate()
+            .IsConcurrencyToken();
     }
 }
