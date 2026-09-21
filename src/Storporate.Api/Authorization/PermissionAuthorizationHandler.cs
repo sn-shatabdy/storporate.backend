@@ -67,16 +67,6 @@ public sealed class PermissionAuthorizationHandler : AuthorizationHandler<Permis
         AuthorizationHandlerContext context,
         PermissionRequirement requirement)
     {
-        // Phase 3 + 4 + 5 all gate on the same "Administrator bypass" decision; the ambient
-        // IsAdministrator flag (set by AccountContextMiddleware from the JWT actor_type claim)
-        // is the single source of truth, so this short-circuit works identically for every
-        // permission policy and every downstream consumer.
-        if (_accountContext.IsAdministrator)
-        {
-            context.Succeed(requirement);
-            return;
-        }
-
         // No ambient user id means AccountContextMiddleware didn't find a sub claim — the
         // policy's RequireAuthenticatedUser() ought to have already turned this request away
         // with a 401. Fail closed rather than guessing. Audit the denial before returning so
@@ -104,6 +94,22 @@ public sealed class PermissionAuthorizationHandler : AuthorizationHandler<Permis
         // AuthorizationPoliciesExtensions), so there's no DI cost to taking it here.
         var cancellationToken = _httpContextAccessor.HttpContext?.RequestAborted ?? CancellationToken.None;
 
+        // STOR-62 Phase 4: the Administrator workspace-isolation bypass is
+        // implemented by <see cref="IPermissionService.HasPermissionAsync"/>
+        // itself — the Administrator grant set starts as
+        // <see cref="Permissions.All"/> by construction (minus
+        // <see cref="SystemRoles.AdministratorExcludedFromAll"/>), so the
+        // same lookup that succeeds for Organization + Student callers
+        // succeeds for Administrator callers too. The previous
+        // short-circuit here was redundant with that and — more
+        // importantly — bypassed the carve-out in
+        // <see cref="SystemRoles.AdministratorExcludedFromAll"/> that
+        // STOR-44 Phase 2 ships (CandidateReview.Read must NOT be
+        // granted to Administrator even though it is in Permissions.All).
+        // Delegating the bypass to <see cref="IPermissionService"/> makes
+        // the carve-out the single source of truth: any future permission
+        // listed there is automatically closed to Administrator callers
+        // without touching this handler.
         var hasPermission = await _permissionService.HasPermissionAsync(
             userId.Value,
             accountId,

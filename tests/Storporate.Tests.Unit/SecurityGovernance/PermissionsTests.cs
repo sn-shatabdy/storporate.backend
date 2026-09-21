@@ -89,19 +89,45 @@ public class PermissionsTests
     }
 
     [Fact]
-    public void Administrator_GrantsExactlyEqualPermissionsAll()
+    public void Administrator_GrantsExactlyEqualPermissionsAllExceptCarveouts()
     {
-        // SystemRoles.Grants["Administrator"] must equal Permissions.All by construction —
-        // i.e. not a hand-maintained wider/narrower list that an Administrator could
-        // accidentally miss a new permission on.
+        // SystemRoles.Grants["Administrator"] starts as Permissions.All
+        // by construction, then has SystemRoles.AdministratorExcludedFromAll
+        // carved out — see SystemRoles.BuildGrants. The set semantics
+        // this test pins:
+        //   * every permission in Permissions.All is granted to Administrator
+        //     UNLESS it appears on the carve-out list;
+        //   * every carved-out permission is NOT granted;
+        //   * no permission is granted that is not in Permissions.All.
+        // The carve-out list is hand-maintained for permissions whose
+        // surface should be deliberately narrowed from Administrator
+        // (e.g. STOR-44 Phase 2's CandidateReview.Read, which reads
+        // another student's TalentIndexEntry even under Administrator's
+        // workspace-isolation bypass). The set equality below catches a
+        // future drift on either side — the carve-out widens here AND
+        // Administrator grants change in one PR.
         Assert.True(SystemRoles.Grants.TryGetValue(SystemRoles.Administrator, out var administratorGrants));
 
         var allSet = new HashSet<string>(Permissions.All, StringComparer.Ordinal);
+        var excluded = SystemRoles.AdministratorExcludedFromAll;
 
-        // Same set semantics either direction: every All entry is granted, and no
-        // permission is granted that isn't in All.
-        Assert.Equal(allSet.Count, administratorGrants.Count);
-        foreach (var permission in allSet)
+        // No permission outside Permissions.All is granted to Administrator.
+        foreach (var permission in administratorGrants)
+        {
+            Assert.Contains(permission, allSet);
+        }
+
+        // Every carve-out is absent from Administrator's grant set.
+        foreach (var permission in excluded)
+        {
+            Assert.DoesNotContain(permission, administratorGrants);
+        }
+
+        // And every other permission is granted.
+        var expected = new HashSet<string>(allSet, StringComparer.Ordinal);
+        expected.ExceptWith(excluded);
+        Assert.Equal(expected.Count, administratorGrants.Count);
+        foreach (var permission in expected)
         {
             Assert.Contains(permission, administratorGrants);
         }

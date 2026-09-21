@@ -37,29 +37,14 @@ public sealed class CreatePortfolioItemValidator : AbstractValidator<CreatePortf
     /// acceptance criterion.</summary>
     public const long MaxFileSizeBytes = 100L * 1024L * 1024L;
 
-    /// <summary>The full allowlist of content types for uploaded portfolio items. Mirrors
-    /// the plan's constraints/assumptions section: documents, images, video, archives.
-    /// Executables / scripts are deliberately omitted.</summary>
-    public static readonly IReadOnlySet<string> AllowedContentTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    {
-        "application/pdf",
-        "application/msword",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/vnd.ms-powerpoint",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "application/vnd.ms-excel",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "text/plain",
-        "text/csv",
-        "image/png",
-        "image/jpeg",
-        "image/gif",
-        "image/webp",
-        "video/mp4",
-        "video/quicktime",
-        "video/webm",
-        "application/zip",
-    };
+    /// <summary>
+    /// Backwards-compatible alias for <see cref="PortfolioContentTypes.Allowed"/>.
+    /// Kept on the validator so existing call sites in the Portfolio module
+    /// (and the unit tests for this validator) continue to compile; new code
+    /// should prefer <see cref="PortfolioContentTypes.Allowed"/> directly so
+    /// callers outside the Portfolio module do not have to depend on it.
+    /// </summary>
+    public static readonly IReadOnlySet<string> AllowedContentTypes = PortfolioContentTypes.Allowed;
 
     public CreatePortfolioItemValidator()
     {

@@ -63,10 +63,36 @@ public static class SystemRoles
     };
 
     /// <summary>
+    /// Permissions that the <see cref="Administrator"/> role's grant set
+    /// does NOT include, even though <see cref="Permissions.All"/> does
+    /// contain them. The carve-out is hand-maintained because the
+    /// "Administrator gets everything" default is the simpler model for
+    /// most permissions but a few deliberately-narrowed surfaces need an
+    /// explicit exemption. STOR-44 Phase 2 ships
+    /// <see cref="Permissions.CandidateReview.Read"/> on this list: the
+    /// drill-down surface reads another student's
+    /// <c>TalentIndexEntry</c>, and even Administrator's
+    /// workspace-isolation bypass does not extend to opening an
+    /// employer-facing drill-down view on someone else's data. A future
+    /// story that wants to open any of these for Administrator widens
+    /// both this list AND the matching test in one PR.
+    /// </summary>
+    /// <remarks>
+    /// Declared BEFORE <see cref="Grants"/> because C# static field
+    /// initializers run in textual source order and <see cref="BuildGrants"/>
+    /// enumerates this set when computing the Administrator entry.
+    /// </remarks>
+    public static readonly IReadOnlySet<string> AdministratorExcludedFromAll = new HashSet<string>(StringComparer.Ordinal)
+    {
+        Permissions.CandidateReview.Read,
+    };
+
+    /// <summary>
     /// Maps each <see cref="SystemRoles"/> role name to its full permission set. The
-    /// <see cref="Administrator"/> entry is exactly <see cref="Permissions.All"/> by
-    /// construction; the other four get narrower, domain-appropriate defaults documented on
-    /// the role constants above.
+    /// <see cref="Administrator"/> entry starts as <see cref="Permissions.All"/> by
+    /// construction, then has <see cref="AdministratorExcludedFromAll"/>
+    /// carved out; the other four roles get narrower, domain-appropriate
+    /// defaults documented on the role constants above.
     /// </summary>
     public static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> Grants = BuildGrants();
 
@@ -79,8 +105,18 @@ public static class SystemRoles
         //     Job listings, so they get Jobs.Read only. A future story that introduces a
         //     write-side workflow for any of these (e.g. a Club posting its own
         //     opportunities, a University sponsoring one) widens its grant set then.
-        //   - Administrator gets Permissions.All — full access across every account,
-        //     enforced by the workspace-isolation bypass path (see ActorTypes remarks).
+        //   - Administrator gets Permissions.All by default — full access
+        //     across every account, enforced by the workspace-isolation
+        //     bypass path (see ActorTypes remarks). The
+        //     <see cref="AdministratorExcludedFromAll"/> set is the single
+        //     hand-maintained carve-out list: any constant listed there is
+        //     deliberately NOT granted to the Administrator role. Today
+        //     that is just CandidateReview.Read — STOR-44 Phase 2 ships
+        //     the new "employer drill-down" surface and the spec
+        //     deliberately narrows Administrator's reach over OTHER
+        //     students' TalentIndexEntry rows so a future support path
+        //     has to make a deliberate, reviewable change before an
+        //     Administrator can open somebody's drill-down.
         //   - STOR-37 Phase 1: Students are the only actors who use the Portfolio
         //     surface, so the Student grant set is widened to include the full
         //     Portfolio.* triple (Create + Read + Delete). University / Club /
@@ -92,6 +128,11 @@ public static class SystemRoles
         //     gate on permissions like every other module's surface. Neither role
         //     gets the other's grant — the talent-search surface is hiring-side and
         //     the searchable-profile surface is student-side.
+        //   - STOR-44 Phase 2: Organizations gain CandidateReview.Read so the
+        //     employer drill-down endpoints (GET review + GET original) can
+        //     gate on a permission like every other module's surface. Students
+        //     get nothing here because the surface reads OTHER students'
+        //     TalentIndexEntry rows, not their own.
         var readOnly = new HashSet<string>(StringComparer.Ordinal) { Permissions.Jobs.Read };
         var fullJobs = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -101,6 +142,13 @@ public static class SystemRoles
             // talent-search pool is the Organization-only view of opted-in students.
             Permissions.TalentSearch.Create,
             Permissions.TalentSearch.Read,
+            // STOR-44 Phase 2: Organization is the only actor that drills
+            // down behind a search result into a single student's
+            // TalentIndexEntry — the GET review and original endpoints share
+            // one Read permission. The Student keeps nothing here because
+            // the surface is the employer-facing view of OTHER students'
+            // (opted-in) entries.
+            Permissions.CandidateReview.Read,
         };
         var studentGrants = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -139,6 +187,19 @@ public static class SystemRoles
             Permissions.SearchableProfile.Update,
         };
         var administrator = new HashSet<string>(Permissions.All, StringComparer.Ordinal);
+        // The drill-down surface reads another student's TalentIndexEntry;
+        // even Administrator's workspace-isolation bypass does not extend
+        // to opening an employer-facing drill-down view on someone
+        // else's data — a deliberate carve-out to keep the permission
+        // gating tight. Drop the constant from the Administrator grant
+        // set explicitly; the PermissionsTests "All = Administrator"
+        // assertion is updated to the same carve-out. A future story
+        // opening any of these for Administrator widens both this list
+        // AND the matching test in one PR.
+        foreach (var excluded in AdministratorExcludedFromAll)
+        {
+            administrator.Remove(excluded);
+        }
 
         // Dictionary keys reference ActorTypes.* rather than the role-name string literals
         // declared on this class so a typo in either side is caught by the compiler instead

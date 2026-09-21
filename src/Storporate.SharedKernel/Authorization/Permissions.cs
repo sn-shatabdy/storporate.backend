@@ -209,6 +209,34 @@ public static class Permissions
     }
 
     /// <summary>
+    /// Permissions governing the employer drill-down into a single student
+    /// surfaced by a STOR-43 talent search (STOR-44 Phase 2). STOR-43
+    /// Phase 1 introduces the student opt-in profile and the non-tenant
+    /// search index that an Organization will eventually query; STOR-44
+    /// Phase 2 adds the two endpoints that read ONE entry from that
+    /// index (<c>GET /api/discovery/candidates/{candidateId}</c> and
+    /// <c>GET /api/discovery/candidates/{candidateId}/items/{portfolioItemId}/original</c>).
+    /// </summary>
+    /// <remarks>
+    /// Held by <see cref="SystemRoles.Organization"/> only; Students / Universities /
+    /// Clubs never read the multi-student drill-down surface because the
+    /// endpoints are the employer-facing "open one candidate" view, and
+    /// Administrator gets it implicitly through <see cref="All"/> for
+    /// future support tooling. Both endpoints share the same single
+    /// <see cref="Read"/> permission: a future split (e.g. gating the
+    /// original-file stream separately from the review summary) would
+    /// add a new constant here without disturbing the existing one.
+    /// </remarks>
+    public static class CandidateReview
+    {
+        /// <summary>Read the single-student review summary and stream the
+        /// per-item original file or external link behind the same gate.
+        /// Used by <c>GET /api/discovery/candidates/{candidateId}</c> and
+        /// <c>GET /api/discovery/candidates/{candidateId}/items/{portfolioItemId}/original</c>.</summary>
+        public const string Read = "candidate-review:read";
+    }
+
+    /// <summary>
     /// Permissions governing the student opt-in "let employers find me" surface
     /// (STOR-43 Phase 1). The constants gate
     /// <c>GET /api/discovery/searchable-profile</c> and
