@@ -149,6 +149,8 @@ public static class SystemRoles
             // the surface is the employer-facing view of OTHER students'
             // (opted-in) entries.
             Permissions.CandidateReview.Read,
+            // STOR-66: Organizations publish and manage their own job / internship postings.
+            Permissions.JobPostings.Manage,
         };
         var studentGrants = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -185,6 +187,8 @@ public static class SystemRoles
             // Update powers the PUT endpoint.
             Permissions.SearchableProfile.Read,
             Permissions.SearchableProfile.Update,
+            // STOR-66: Students browse Open postings and see their skill fit.
+            Permissions.JobPostings.Read,
         };
         var administrator = new HashSet<string>(Permissions.All, StringComparer.Ordinal);
         // The drill-down surface reads another student's TalentIndexEntry;
