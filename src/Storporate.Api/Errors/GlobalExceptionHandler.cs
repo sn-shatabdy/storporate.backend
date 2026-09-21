@@ -61,6 +61,12 @@ public sealed class GlobalExceptionHandler(
                 (StatusCodes.Status409Conflict, new ErrorResponse("talent_search_busy", talentSearchBusyException.Message)),
             Storporate.Modules.DiscoveryHiring.Exceptions.JobPostingClosedException jobPostingClosedException =>
                 (StatusCodes.Status409Conflict, new ErrorResponse("job_posting_closed", jobPostingClosedException.Message)),
+            Storporate.Modules.DiscoveryHiring.Exceptions.JobPostingConflictException jobPostingConflictException =>
+                (StatusCodes.Status409Conflict, new ErrorResponse("job_posting_conflict", jobPostingConflictException.Message)),
+            Storporate.Modules.DiscoveryHiring.Exceptions.JobPostingDeadlinePassedException jobPostingDeadlinePassedException =>
+                (StatusCodes.Status409Conflict, new ErrorResponse("job_posting_deadline_passed", jobPostingDeadlinePassedException.Message)),
+            Storporate.Modules.DiscoveryHiring.Exceptions.JobPostingQueryInvalidException jobPostingQueryInvalidException =>
+                (StatusCodes.Status400BadRequest, new ErrorResponse("job_posting_query_invalid", jobPostingQueryInvalidException.Message)),
             Storporate.Modules.DiscoveryHiring.Exceptions.ApplicationAlreadySubmittedException applicationAlreadySubmittedException =>
                 (StatusCodes.Status409Conflict, new ErrorResponse("application_already_submitted", applicationAlreadySubmittedException.Message)),
             Storporate.Modules.DiscoveryHiring.Exceptions.OutreachAwaitingReplyException outreachAwaitingReplyException =>
@@ -83,6 +89,8 @@ public sealed class GlobalExceptionHandler(
                 (StatusCodes.Status400BadRequest, new ErrorResponse("unknown_sort_key", unknownSortKeyException.Message)),
             Storporate.Modules.Portfolio.UnknownSortKeyException portfolioUnknownSortKey =>
                 (StatusCodes.Status400BadRequest, new ErrorResponse("unknown_sort_key", portfolioUnknownSortKey.Message)),
+            Storporate.Modules.DiscoveryHiring.JobPostings.UnknownSortKeyException discoveryHiringUnknownSortKey =>
+                (StatusCodes.Status400BadRequest, new ErrorResponse("unknown_sort_key", discoveryHiringUnknownSortKey.Message)),
             // The multipart reader throws InvalidDataException once the request body
             // crosses FormOptions.MultipartBodyLengthLimit — see Program.cs's
             // Configure<FormOptions>. Map it to a clean 400 / file_too_large rather

@@ -17,6 +17,12 @@ public static class ManageJobPostingsHandler
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    /// <summary>Maximum items returned by the employer list endpoint.</summary>
+    public const int MaxEmployerListItems = 100;
+
+    /// <summary>Maximum items the student browse computes fit against before sorting + paging.</summary>
+    public const int MaxFitCandidates = 300;
+
     public static async Task<JobPostingResponse> CreateAsync(
         SaveJobPostingRequest request,
         Guid accountId,
@@ -26,6 +32,7 @@ public static class ManageJobPostingsHandler
         CancellationToken cancellationToken)
     {
         var now = timeProvider.GetUtcNow();
+        var normalizedSkills = JobPostingSkills.Normalize(request.RequiredSkills!);
         var posting = new JobPosting
         {
             Id = Guid.NewGuid(),
@@ -36,8 +43,16 @@ public static class ManageJobPostingsHandler
             Location = NormalizeLocation(request.Location),
             WorkMode = request.WorkMode!,
             Description = request.Description!.Trim(),
-            RequiredSkillsJson = JobPostingSkills.Serialize(JobPostingSkills.Normalize(request.RequiredSkills!)),
+            RequiredSkillsJson = JobPostingSkills.Serialize(normalizedSkills),
             Status = JobPostingStatuses.Open,
+            ApplicationDeadline = request.ApplicationDeadline,
+            Openings = request.Openings ?? 1,
+            CompensationMin = request.Compensation?.Min,
+            CompensationMax = request.Compensation?.Max,
+            ShowCompensation = request.Compensation?.VisibleToStudents ?? false,
+            SearchText = JobPostingSkills.BuildSearchText(
+                request.Title.Trim(), request.CompanyName.Trim(),
+                NormalizeLocation(request.Location), normalizedSkills),
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -51,21 +66,59 @@ public static class ManageJobPostingsHandler
             JsonSerializer.Serialize(new { jobPostingId = posting.Id }, JsonOptions),
             cancellationToken).ConfigureAwait(false);
 
-        return ToResponse(posting);
+        return ToResponse(posting, applicantCount: 0);
     }
 
     public static async Task<JobPostingListResponse> ListAsync(
+        string? status,
+        string? query,
         Guid accountId,
         WriteDbContext dbContext,
+        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
-        var rows = await dbContext.JobPostings
+        var normalizedQuery = NormalizeQuery(query);
+
+        var allOwn = dbContext.JobPostings
             .AsNoTracking()
-            .Where(p => p.OwnerAccountId == accountId)
-            .OrderByDescending(p => p.CreatedAt)
+            .Where(p => p.OwnerAccountId == accountId);
+
+        // counts ignore status / q filters — always over every own posting.
+        var grouped = await allOwn
+            .GroupBy(p => p.Status)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
-        return new JobPostingListResponse(rows.Select(ToResponse).ToList());
+        var counts = new JobPostingStatusCounts(
+            Open: grouped.FirstOrDefault(g => g.Status == JobPostingStatuses.Open)?.Count ?? 0,
+            Paused: grouped.FirstOrDefault(g => g.Status == JobPostingStatuses.Paused)?.Count ?? 0,
+            Closed: grouped.FirstOrDefault(g => g.Status == JobPostingStatuses.Closed)?.Count ?? 0,
+            Total: grouped.Sum(g => g.Count));
+
+        var filtered = allOwn;
+        if (!string.IsNullOrEmpty(status))
+        {
+            filtered = filtered.Where(p => p.Status == status);
+        }
+
+        if (normalizedQuery is not null)
+        {
+            var padded = $" {normalizedQuery} ";
+            filtered = filtered.Where(p => (" " + p.SearchText + " ").Contains(padded));
+        }
+
+        var rows = await filtered
+            .OrderByDescending(p => p.CreatedAt)
+            .Take(MaxEmployerListItems)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var applicantCounts = await LoadApplicantCountsAsync(
+            dbContext, rows.Select(p => p.Id), cancellationToken).ConfigureAwait(false);
+
+        return new JobPostingListResponse(
+            rows.Select(p => ToResponse(p, applicantCounts.GetValueOrDefault(p.Id))).ToList(),
+            counts);
     }
 
     public static async Task<JobPostingResponse?> GetAsync(
@@ -78,7 +131,14 @@ public static class ManageJobPostingsHandler
             .AsNoTracking()
             .FirstOrDefaultAsync(p => p.Id == id && p.OwnerAccountId == accountId, cancellationToken)
             .ConfigureAwait(false);
-        return posting is null ? null : ToResponse(posting);
+        if (posting is null)
+        {
+            return null;
+        }
+
+        var applicantCount = await LoadApplicantCountsAsync(
+            dbContext, new[] { posting.Id }, cancellationToken).ConfigureAwait(false);
+        return ToResponse(posting, applicantCount: applicantCount.GetValueOrDefault(posting.Id));
     }
 
     /// <summary>Returns null when not found. Throws <see cref="JobPostingClosedException"/> for a Closed posting.</summary>
@@ -104,15 +164,30 @@ public static class ManageJobPostingsHandler
             throw new JobPostingClosedException();
         }
 
+        var normalizedSkills = JobPostingSkills.Normalize(request.RequiredSkills!);
         posting.Title = request.Title!.Trim();
         posting.Kind = request.Kind!;
         posting.CompanyName = request.CompanyName!.Trim();
         posting.Location = NormalizeLocation(request.Location);
         posting.WorkMode = request.WorkMode!;
         posting.Description = request.Description!.Trim();
-        posting.RequiredSkillsJson = JobPostingSkills.Serialize(JobPostingSkills.Normalize(request.RequiredSkills!));
+        posting.RequiredSkillsJson = JobPostingSkills.Serialize(normalizedSkills);
+        posting.ApplicationDeadline = request.ApplicationDeadline;
+        posting.Openings = request.Openings ?? 1;
+        posting.CompensationMin = request.Compensation?.Min ?? posting.CompensationMin;
+        posting.CompensationMax = request.Compensation?.Max ?? posting.CompensationMax;
+        posting.ShowCompensation = request.Compensation?.VisibleToStudents ?? posting.ShowCompensation;
+        posting.SearchText = JobPostingSkills.BuildSearchText(
+            posting.Title, posting.CompanyName, posting.Location, normalizedSkills);
         posting.UpdatedAt = timeProvider.GetUtcNow();
-        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new JobPostingConflictException();
+        }
 
         await auditLogWriter.WriteAsync(
             "job_posting_updated",
@@ -121,7 +196,9 @@ public static class ManageJobPostingsHandler
             JsonSerializer.Serialize(new { jobPostingId = posting.Id }, JsonOptions),
             cancellationToken).ConfigureAwait(false);
 
-        return ToResponse(posting);
+        var applicantCount = await LoadApplicantCountsAsync(
+            dbContext, new[] { posting.Id }, cancellationToken).ConfigureAwait(false);
+        return ToResponse(posting, applicantCount: applicantCount.GetValueOrDefault(posting.Id));
     }
 
     /// <summary>
@@ -152,7 +229,9 @@ public static class ManageJobPostingsHandler
 
         if (posting.Status == newStatus)
         {
-            return ToResponse(posting);
+            var applicantCount = await LoadApplicantCountsAsync(
+                dbContext, new[] { posting.Id }, cancellationToken).ConfigureAwait(false);
+            return ToResponse(posting, applicantCount: applicantCount.GetValueOrDefault(posting.Id));
         }
 
         var now = timeProvider.GetUtcNow();
@@ -163,7 +242,14 @@ public static class ManageJobPostingsHandler
             posting.ClosedAt = now;
         }
 
-        await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new JobPostingConflictException();
+        }
 
         await auditLogWriter.WriteAsync(
             "job_posting_status_changed",
@@ -172,10 +258,14 @@ public static class ManageJobPostingsHandler
             JsonSerializer.Serialize(new { jobPostingId = posting.Id, status = posting.Status }, JsonOptions),
             cancellationToken).ConfigureAwait(false);
 
-        return ToResponse(posting);
+        var statusChangedApplicantCount = await LoadApplicantCountsAsync(
+            dbContext, new[] { posting.Id }, cancellationToken).ConfigureAwait(false);
+        return ToResponse(
+            posting,
+            applicantCount: statusChangedApplicantCount.GetValueOrDefault(posting.Id));
     }
 
-    internal static JobPostingResponse ToResponse(JobPosting p) => new(
+    internal static JobPostingResponse ToResponse(JobPosting p, int applicantCount) => new(
         p.Id,
         p.Title,
         p.Kind,
@@ -184,13 +274,62 @@ public static class ManageJobPostingsHandler
         p.WorkMode,
         p.Description,
         JobPostingSkills.Deserialize(p.RequiredSkillsJson),
+        p.ApplicationDeadline,
+        p.Openings,
+        new JobPostingCompensationResponse(p.CompensationMin, p.CompensationMax, p.ShowCompensation),
         p.Status,
+        IsExpiredAt(p, DateOnly.FromDateTime(DateTime.UtcNow)),
+        applicantCount,
         p.CreatedAt,
         p.UpdatedAt);
+
+    /// <summary>A posting is expired when it's Open and its deadline (UTC date) is before today.</summary>
+    internal static bool IsExpiredAt(JobPosting p, DateOnly todayUtc) =>
+        p.Status == JobPostingStatuses.Open
+            && p.ApplicationDeadline.HasValue
+            && p.ApplicationDeadline.Value < todayUtc;
 
     private static string? NormalizeLocation(string? location)
     {
         var trimmed = location?.Trim();
         return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+    }
+
+    private static async Task<Dictionary<Guid, int>> LoadApplicantCountsAsync(
+        WriteDbContext dbContext,
+        IEnumerable<Guid> postingIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = postingIds.ToList();
+        if (ids.Count == 0)
+        {
+            return new Dictionary<Guid, int>();
+        }
+
+        var rows = await dbContext.JobApplications
+            .AsNoTracking()
+            .Where(a => ids.Contains(a.JobPostingId))
+            .GroupBy(a => a.JobPostingId)
+            .Select(g => new { JobPostingId = g.Key, Count = g.Count() })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return rows.ToDictionary(r => r.JobPostingId, r => r.Count);
+    }
+
+    /// <summary>Lower-case + collapse whitespace + 100-char cap; null when query is empty.</summary>
+    internal static string? NormalizeQuery(string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return null;
+        }
+
+        var trimmed = query.Trim();
+        if (trimmed.Length > 100)
+        {
+            throw new JobPostingQueryInvalidException();
+        }
+
+        return trimmed.ToLowerInvariant();
     }
 }
